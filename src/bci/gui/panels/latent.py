@@ -17,6 +17,8 @@ class LatentPanel:
         layout.addWidget(self.plot)
         self.text = pg.TextItem("waiting for model")
         self.plot.addItem(self.text)
+        self._live_curve = None
+        self._live_label = None
 
     def update_metrics(self, metrics: dict) -> None:
         separation = metrics.get("separation", {})
@@ -27,9 +29,11 @@ class LatentPanel:
         if diagnostics is None:
             return
         self.plot.clear()
+        self._live_curve = None
         if diagnostics.latent_points is None or diagnostics.latent_labels is None:
             self.text.setText("model updated")
             self.plot.addItem(self.text)
+            self._ensure_live_curve()
             return
         points = diagnostics.latent_points
         labels = np.asarray(diagnostics.latent_labels)
@@ -47,3 +51,18 @@ class LatentPanel:
             x = float(center[0])
             y = float(center[1]) if len(center) > 1 else 0.0
             self.plot.plot([x], [y], pen=None, symbol="x", symbolSize=14, symbolBrush=colors.get(label, "w"))
+        self._ensure_live_curve()
+
+    def update_live_point(self, point: list[float], predicted_label: str | None) -> None:
+        if not point:
+            return
+        curve = self._ensure_live_curve()
+        x = float(point[0])
+        y = float(point[1]) if len(point) > 1 else 0.0
+        colors = {"LEFT": "g", "RIGHT": "c", "NONE": "m", None: "y"}
+        curve.setData([x], [y], symbolBrush=colors.get(predicted_label, "y"))
+
+    def _ensure_live_curve(self):
+        if self._live_curve is None:
+            self._live_curve = self.plot.plot([], [], pen=None, symbol="star", symbolSize=18, symbolBrush="y")
+        return self._live_curve

@@ -77,7 +77,7 @@ class PreprocessingConfig(BaseModel):
 
 class TrialConfig(BaseModel):
     onset_offset_seconds: float = 0.25
-    window_seconds: float = 1.5
+    window_seconds: float = 1.0
     inference_stride_seconds: float = 0.25
 
 
@@ -195,12 +195,13 @@ class ExperimentConfig(BaseModel):
     poll_interval_seconds: float = 0.01
     max_idle_seconds: float = 15.0
     synthetic_difficulty: Literal["perfect", "easy", "noisy"] = "easy"
+    live_preview: bool = True
 
 
 class GUIConfig(BaseModel):
     enabled: bool = False
     refresh_hz: float = 15.0
-    eeg_history_seconds: float = 5.0
+    eeg_history_seconds: float = 1.0
     spectrum_max_hz: float = 50.0
     max_channels_displayed: int = 8
     show_latent: bool = True

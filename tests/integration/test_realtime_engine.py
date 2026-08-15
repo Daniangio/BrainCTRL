@@ -9,7 +9,7 @@ from bci.buffering.ring import TimestampedRingBuffer
 from bci.config import load_config
 from bci.domain import BCIEvent, EEGChunk
 from bci.experiment.bus import EventBus
-from bci.experiment.events import CalibrationStatus, DecisionEmitted, ModelUpdated, PredictionProduced, TrialStarted
+from bci.experiment.events import CalibrationStatus, DecisionEmitted, LiveWindowUpdated, ModelUpdated, PredictionProduced, TrialStarted
 from bci.experiment.factory import build_realtime_experiment
 from bci.experiment.trial_builder import RealtimeTrialBuilder
 from bci.features.spectral import SpectralFeatureExtractor
@@ -73,7 +73,7 @@ def test_controller_smoke_exercises_evidence_accumulator(tmp_path):
     assert result.model_version >= 1
     assert result.metrics["smoke"]["mode"] == "controller_smoke"
     assert result.metrics["smoke"]["decision_policy"]["consecutive_windows"] == 2
-    assert result.metrics["smoke"]["n_calibration_features"] == 60
+    assert result.metrics["smoke"]["n_calibration_features"] >= config.calibration.batch_size_trials
     assert "LEFT" in emitted
     assert "RIGHT" in emitted
     assert any(event.decision.reason.startswith("waiting_consecutive") for event in decisions)
@@ -119,6 +119,26 @@ def test_immediate_decision_parameter_change_is_logged(tmp_path):
     log = (tmp_path / "parameter_change_log.csv").read_text(encoding="utf-8")
     assert "decision.posterior_threshold" in log
     assert "False" in log
+
+
+def test_live_preview_updates_at_stride_without_training_contamination(tmp_path):
+    config = load_config("configs/kalunga_v0.yaml")
+    config.experiment.mode = "controller_smoke"
+    config.output.console = False
+    config.experiment.max_idle_seconds = 2.0
+    config.trials.window_seconds = 1.0
+    config.trials.inference_stride_seconds = 0.25
+    bus = EventBus()
+    live_updates: list[LiveWindowUpdated] = []
+    bus.subscribe(LiveWindowUpdated, live_updates.append)
+    result = build_realtime_experiment(config, bus=bus, artifact_dir=tmp_path).run()
+    assert len(live_updates) >= 20
+    assert any(update.prediction is not None for update in live_updates)
+    assert any(update.latent_point is not None for update in live_updates)
+    assert all(update.decision is None or update.decision.reason.startswith("preview_") for update in live_updates)
+    assert result.n_trials == result.metrics["n_features"]
+    assert "preview" not in (tmp_path / "features.csv").read_text(encoding="utf-8")
+    assert all(update.feature.split == "preview" for update in live_updates)
 
 
 def test_replay_features_match_offline_features_synthetic():

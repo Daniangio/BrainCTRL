@@ -9,6 +9,7 @@ from bci.experiment.events import (
     CalibrationBatchReady,
     CalibrationStatus,
     GroundTruthChanged,
+    LiveWindowUpdated,
     ModelUpdated,
     PhaseChanged,
     PredictionProduced,
@@ -94,6 +95,18 @@ class MainWindow:
             self.calibration.add_trial(event.trial)
         elif isinstance(event, FeatureComputed):
             self.spectrum.update_feature(event.feature)
+        elif isinstance(event, LiveWindowUpdated):
+            self.spectrum.update_feature(event.feature)
+            if event.latent_point is not None:
+                predicted_label = event.prediction.predicted_label if event.prediction is not None else None
+                self.latent.update_live_point(event.latent_point, predicted_label)
+            if event.prediction is not None:
+                self.probabilities.update_prediction(event.prediction)
+                self.interpretation.update_prediction(event.prediction)
+            if event.decision is not None:
+                self.probabilities.update_decision(event.decision)
+                self.interpretation.update_decision(event.decision)
+                self.status.set_decision(event.decision)
         elif isinstance(event, ModelUpdated):
             self.status.set_model(event.model_version)
             self.calibration.set_model(event.model_version, event.metrics)

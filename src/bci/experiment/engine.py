@@ -10,7 +10,7 @@ from typing import Any
 
 from bci.buffering.ring import TimestampedRingBuffer
 from bci.config import BCIConfig, write_resolved_config
-from bci.domain import CalibrationPhase, Decision, FeatureRecord, Prediction
+from bci.domain import CalibrationPhase, Decision, FeatureRecord, Prediction, TrialRecord
 from bci.evaluation.metrics import summarize_predictions
 from bci.experiment.bus import EventBus
 from bci.experiment.events import (
@@ -25,6 +25,7 @@ from bci.experiment.events import (
     FitFailed,
     FitStarted,
     GroundTruthChanged,
+    LiveWindowUpdated,
     ModelUpdated,
     ParameterChanged,
     PhaseChanged,
@@ -107,6 +108,8 @@ class RealtimeExperimentEngine:
         self._new_source_events_since_fit: set[int] = set()
         self._fitted_source_events: set[int] = set()
         self._actions: queue.Queue[ProtocolCommand] = queue.Queue()
+        self._last_live_preview_time: float | None = None
+        self._live_preview_counter = 0
 
     def stop(self) -> None:
         self._stop = True
@@ -161,6 +164,7 @@ class RealtimeExperimentEngine:
                     self.bus.publish(EEGWindowReady(chunk))
                     if hasattr(self.event_source, "advance_to") and ring.latest_time is not None:
                         self.event_source.advance_to(ring.latest_time)  # type: ignore[attr-defined]
+                    self._maybe_publish_live_preview(ring)
                 for event in self.event_source.poll():
                     pending = trial_builder.add_event(event)
                     if pending is not None:
@@ -227,6 +231,82 @@ class RealtimeExperimentEngine:
         if self.decoder.model_version:
             self._set_phase(CalibrationPhase.INFERENCE)
             self._predict_and_emit(feature, self._test_predictions)
+
+    def _maybe_publish_live_preview(self, ring: TimestampedRingBuffer) -> None:
+        if not self.config.experiment.live_preview or ring.latest_time is None:
+            return
+        latest = ring.latest_time
+        stride = self.config.trials.inference_stride_seconds
+        if self._last_live_preview_time is not None and latest - self._last_live_preview_time < stride:
+            return
+        start = latest - self.config.trials.window_seconds
+        end = latest
+        if not ring.has_interval(start, end):
+            return
+        expected_samples = int(round(self.config.trials.window_seconds * ring.sfreq))
+        chunk = ring.slice(start, end, expected_samples=expected_samples)
+        trial = TrialRecord(
+            trial_id=f"live-preview-{self._live_preview_counter}",
+            dataset=self.config.dataset.name,
+            subject=self.config.dataset.subjects[0] if self.config.dataset.subjects else 0,
+            session="live",
+            run="live",
+            event_index=-1,
+            native_label="live_preview",
+            command="NONE",
+            start_time=start,
+            end_time=end,
+            sfreq=ring.sfreq,
+            ch_names=list(ring.ch_names),
+            data=chunk.data,
+            source_event_id=None,
+            split="preview",
+        )
+        self._live_preview_counter += 1
+        self._last_live_preview_time = latest
+        feature = self.feature_extractor.transform(self.preprocessor.transform(trial))
+        prediction: Prediction | None = None
+        decision: Decision | None = None
+        if self.decoder.model_version:
+            probs = self.decoder.predict(feature)
+            label, confidence = max(probs.items(), key=lambda item: item[1])
+            prediction = Prediction(
+                trial_id=feature.trial_id,
+                true_label=None,
+                probabilities=probs,
+                predicted_label=label,
+                confidence=float(confidence),
+                model_version=self.decoder.model_version,
+                timestamp=end,
+            )
+            decision = self._preview_decision(prediction)
+        latent_point = self._preview_latent_point(feature)
+        self.bus.publish(LiveWindowUpdated(feature, prediction, decision, latent_point))
+
+    def _preview_decision(self, prediction: Prediction) -> Decision:
+        command = prediction.predicted_label
+        reason = "preview_argmax"
+        if prediction.confidence < self.config.decision.posterior_threshold:
+            command = "NONE"
+            reason = "preview_below_threshold"
+        return Decision(
+            timestamp=prediction.timestamp,
+            command=command if self.config.decision.emit_none or command != "NONE" else "",
+            probabilities=dict(prediction.probabilities),
+            confidence=prediction.confidence,
+            model_version=prediction.model_version,
+            reason=reason,
+            threshold=self.config.decision.posterior_threshold,
+            consecutive=1 if command != "NONE" else 0,
+            required_consecutive=1,
+        )
+
+    def _preview_latent_point(self, feature: FeatureRecord) -> list[float] | None:
+        try:
+            point = self.decoder.transform_latent(feature.values)[0]
+        except (NotImplementedError, RuntimeError, ValueError, AttributeError):
+            return None
+        return [float(value) for value in point]
 
     def _maybe_update_model(self) -> bool:
         expected = list(self.config.protocol.classes)

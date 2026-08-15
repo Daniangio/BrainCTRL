@@ -48,7 +48,7 @@ preprocessing:
 
 trials:
   onset_offset_seconds: 0.25
-  window_seconds: 1.5
+  window_seconds: 1.0
   inference_stride_seconds: 0.25
 
 features:
@@ -137,11 +137,12 @@ experiment:
   manual_start: false
   poll_interval_seconds: 0.01
   max_idle_seconds: 15.0
+  live_preview: true
 
 gui:
   enabled: true
   refresh_hz: 15.0
-  eeg_history_seconds: 5.0
+  eeg_history_seconds: 1.0
   spectrum_max_hz: 50.0
   max_channels_displayed: 8
   show_latent: true
