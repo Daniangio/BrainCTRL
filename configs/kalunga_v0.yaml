@@ -21,6 +21,9 @@ source:
     annotations_encoding: one-hot
     repeat: 1
     chunk_size_samples: 1
+    speed: 0.0
+    allow_pause: true
+    allow_step: true
   lsl:
     buffer_seconds: 10.0
     acquisition_delay_seconds: 0.01
@@ -131,6 +134,7 @@ experiment:
   mode: labeled_replay
   gui: true
   max_trials: null
+  manual_start: false
   poll_interval_seconds: 0.01
   max_idle_seconds: 15.0
 

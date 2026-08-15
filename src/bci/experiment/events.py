@@ -71,6 +71,61 @@ class ModelUpdated:
 
 
 @dataclass(frozen=True)
+class ProtocolReady:
+    state: CalibrationPhase
+    protocol_summary: dict
+
+
+@dataclass(frozen=True)
+class GroundTruthChanged:
+    command: str | None
+    native_label: str
+    event_index: int | None
+    split: str | None
+
+
+@dataclass(frozen=True)
+class FitStarted:
+    next_model_version: int
+    n_calibration_events: int
+
+
+@dataclass(frozen=True)
+class FitFailed:
+    reason: str
+
+
+@dataclass(frozen=True)
+class ChallengeRoundFinished:
+    metrics: dict
+    passed: bool
+
+
+@dataclass(frozen=True)
+class FinalTestFinished:
+    metrics: dict
+
+
+@dataclass(frozen=True)
+class ReplayPaused:
+    paused: bool
+
+
+@dataclass(frozen=True)
+class ReplaySpeedChanged:
+    speed: float
+
+
+@dataclass(frozen=True)
+class ParameterChanged:
+    parameter: str
+    old_value: object
+    new_value: object
+    requires_refit: bool
+    model_version_before: int
+
+
+@dataclass(frozen=True)
 class PredictionProduced:
     prediction: Prediction
 

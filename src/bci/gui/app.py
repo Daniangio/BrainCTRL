@@ -13,6 +13,9 @@ def run_gui(config: BCIConfig) -> int:
     from PySide6.QtWidgets import QApplication
 
     app = QApplication.instance() or QApplication(sys.argv)
+    config.experiment.manual_start = True
+    if config.source.replay.speed <= 0:
+        config.source.replay.speed = 1.0
     bus = EventBus()
     managed = build_realtime_experiment(config, bus=bus)
     window = MainWindow(config)
@@ -20,6 +23,7 @@ def run_gui(config: BCIConfig) -> int:
     worker.event_received.connect(window.handle_event)
     worker.finished.connect(window.handle_finished)
     window.stop_requested.connect(worker.stop)
+    window.action_requested.connect(worker.request_action)
     window.show()
     worker.start()
     return int(app.exec())

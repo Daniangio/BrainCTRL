@@ -31,13 +31,7 @@ class ManagedExperiment:
         self.publisher = publisher
 
     def run(self) -> ExperimentResult:
-        if self.publisher is not None:
-            self.publisher.start()
-        try:
-            return self.engine.run()
-        finally:
-            if self.publisher is not None:
-                self.publisher.stop()
+        return self.engine.run()
 
     def stop(self) -> None:
         self.engine.stop()
@@ -90,6 +84,7 @@ def build_realtime_experiment(config: BCIConfig, bus: EventBus | None = None, ar
         split_by_event=split_by_event,
         streaming_preprocessor=StreamingPreprocessor(config),
         protocol_entries=protocol_entries,
+        publisher=publisher,
         artifact_dir=artifact_dir,
     )
     return ManagedExperiment(engine, publisher)

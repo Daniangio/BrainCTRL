@@ -36,3 +36,19 @@ Artifacts written per experiment include:
 - `metrics.json`
 
 Realtime preprocessing is stateful: causal IIR filters process continuous chunks before the ring buffer. Trial-level preprocessing then avoids restarting filters on each window.
+
+## Interactive Control
+
+The engine accepts protocol actions through a thread-safe queue. GUI widgets request actions such as:
+
+- start calibration;
+- start challenge;
+- pause/resume/step replay;
+- change replay speed;
+- update decision-controller parameters.
+
+The engine owns validity and state transitions. The GUI only sends requests and renders events.
+
+Headless CLI smoke runs auto-start and use `source.replay.speed: 0.0`, meaning maximum speed. GUI runs set `manual_start=true` and default to approximately `1x` replay speed.
+
+Immediate decision-controller changes are logged to `parameter_change_log.csv` and do not refit the model.

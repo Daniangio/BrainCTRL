@@ -33,6 +33,9 @@ class ReplayConfig(BaseModel):
     annotations_encoding: str = "one-hot"
     repeat: int = 1
     chunk_size_samples: int = 1
+    speed: float = 0.0
+    allow_pause: bool = True
+    allow_step: bool = True
 
 
 class LSLConfig(BaseModel):
@@ -188,6 +191,7 @@ class ExperimentConfig(BaseModel):
     ] = "labeled_replay"
     gui: bool = False
     max_trials: int | None = None
+    manual_start: bool = False
     poll_interval_seconds: float = 0.01
     max_idle_seconds: float = 15.0
     synthetic_difficulty: Literal["perfect", "easy", "noisy"] = "easy"

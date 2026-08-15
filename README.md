@@ -36,6 +36,8 @@ python -m bci.cli experiment --config configs/kalunga_v0.yaml --smoke-mode class
 python -m bci.cli experiment --config configs/kalunga_v0.yaml --smoke-mode controller --no-gui
 ```
 
+GUI mode starts paused in a ready state and exposes controls for calibration start, challenge start, replay speed, pause/resume/step, and decision thresholds.
+
 ## Flow
 
 ```text

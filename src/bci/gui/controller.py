@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from bci.experiment.bus import EventBus
 from bci.experiment.factory import ManagedExperiment
+from bci.protocol.state_machine import ProtocolAction
 
 
 class ExperimentWorker:
@@ -37,3 +38,6 @@ class ExperimentWorker:
 
     def stop(self) -> None:
         self._thread.stop()
+
+    def request_action(self, action: ProtocolAction, payload: dict | None = None) -> None:
+        self._thread.managed.engine.request_action(action, payload or {})

@@ -8,6 +8,7 @@ from bci.experiment.events import (
     FeatureComputed,
     CalibrationBatchReady,
     CalibrationStatus,
+    GroundTruthChanged,
     ModelUpdated,
     PhaseChanged,
     PredictionProduced,
@@ -16,6 +17,8 @@ from bci.experiment.events import (
     TrialStarted,
 )
 from bci.gui.panels.calibration import CalibrationPanel
+from bci.gui.panels.controls import ControlsPanel
+from bci.gui.panels.interpretation import InterpretationPanel
 from bci.gui.panels.latent import LatentPanel
 from bci.gui.panels.probabilities import ProbabilityPanel
 from bci.gui.panels.signal import SignalPanel
@@ -30,6 +33,7 @@ class MainWindow:
 
         class _Window(QMainWindow):
             stop_requested = Signal()
+            action_requested = Signal(object, object)
 
             def closeEvent(self, event):  # noqa: N802
                 self.stop_requested.emit()
@@ -38,24 +42,32 @@ class MainWindow:
         self._window = _Window()
         self._window.setWindowTitle("BrainCTRL realtime experiment")
         self.status = StatusPanel(config)
+        self.interpretation = InterpretationPanel()
         self.signal = SignalPanel(config)
         self.spectrum = SpectrumPanel(config)
         self.probabilities = ProbabilityPanel()
         self.latent = LatentPanel()
         self.calibration = CalibrationPanel()
+        self.controls = ControlsPanel(config, self._window.action_requested.emit)
         root = QWidget()
         layout = QGridLayout(root)
         layout.addWidget(self.status.widget, 0, 0, 1, 2)
-        layout.addWidget(self.signal.widget, 1, 0)
-        layout.addWidget(self.spectrum.widget, 1, 1)
-        layout.addWidget(self.probabilities.widget, 2, 0)
-        layout.addWidget(self.latent.widget, 2, 1)
-        layout.addWidget(self.calibration.widget, 3, 0, 1, 2)
+        layout.addWidget(self.interpretation.widget, 1, 0, 1, 2)
+        layout.addWidget(self.signal.widget, 2, 0)
+        layout.addWidget(self.spectrum.widget, 2, 1)
+        layout.addWidget(self.probabilities.widget, 3, 0)
+        layout.addWidget(self.latent.widget, 3, 1)
+        layout.addWidget(self.calibration.widget, 4, 0, 1, 2)
+        layout.addWidget(self.controls.widget, 5, 0, 1, 2)
         self._window.setCentralWidget(root)
 
     @property
     def stop_requested(self):
         return self._window.stop_requested
+
+    @property
+    def action_requested(self):
+        return self._window.action_requested
 
     def show(self) -> None:
         self._window.resize(1280, 850)
@@ -74,6 +86,8 @@ class MainWindow:
             self.signal.update_chunk(event.chunk)
         elif isinstance(event, TrialStarted):
             self.calibration.start_trial(event.event)
+        elif isinstance(event, GroundTruthChanged):
+            self.interpretation.update_ground_truth(event)
         elif isinstance(event, CalibrationBatchReady):
             self.calibration.set_batch(event.n_batch, event.n_total)
         elif isinstance(event, TrialCompleted):
@@ -88,8 +102,10 @@ class MainWindow:
             self.calibration.set_status(event)
         elif isinstance(event, PredictionProduced):
             self.probabilities.update_prediction(event.prediction)
+            self.interpretation.update_prediction(event.prediction)
         elif isinstance(event, DecisionEmitted):
             self.probabilities.update_decision(event.decision)
+            self.interpretation.update_decision(event.decision)
             self.status.set_decision(event.decision)
         elif isinstance(event, ExperimentFinished):
             self.status.set_message(f"Finished: {event.artifact_dir}")

@@ -1,16 +1,20 @@
 from __future__ import annotations
 
+import threading
+import time
+
 import numpy as np
 
 from bci.buffering.ring import TimestampedRingBuffer
 from bci.config import load_config
 from bci.domain import BCIEvent, EEGChunk
 from bci.experiment.bus import EventBus
-from bci.experiment.events import CalibrationStatus, DecisionEmitted, ModelUpdated, PredictionProduced
+from bci.experiment.events import CalibrationStatus, DecisionEmitted, ModelUpdated, PredictionProduced, TrialStarted
 from bci.experiment.factory import build_realtime_experiment
 from bci.experiment.trial_builder import RealtimeTrialBuilder
 from bci.features.spectral import SpectralFeatureExtractor
 from bci.preprocessing.standard import StandardPreprocessor
+from bci.protocol.state_machine import ProtocolAction
 
 
 def test_synthetic_realtime_engine_headless(tmp_path):
@@ -74,6 +78,47 @@ def test_controller_smoke_exercises_evidence_accumulator(tmp_path):
     assert "RIGHT" in emitted
     assert any(event.decision.reason.startswith("waiting_consecutive") for event in decisions)
     assert "reason" in (tmp_path / "decisions.csv").read_text(encoding="utf-8").splitlines()[0]
+
+
+def test_manual_start_blocks_until_start_calibration_action(tmp_path):
+    config = load_config("configs/kalunga_v0.yaml")
+    config.experiment.mode = "classifier_smoke"
+    config.experiment.manual_start = True
+    config.output.console = False
+    config.experiment.max_idle_seconds = 5.0
+    bus = EventBus()
+    trials: list[TrialStarted] = []
+    updates: list[ModelUpdated] = []
+    bus.subscribe(TrialStarted, trials.append)
+    bus.subscribe(ModelUpdated, updates.append)
+    managed = build_realtime_experiment(config, bus=bus, artifact_dir=tmp_path)
+    result_box = {}
+    thread = threading.Thread(target=lambda: result_box.setdefault("result", managed.run()), daemon=True)
+    thread.start()
+    time.sleep(0.2)
+    assert trials == []
+    managed.engine.request_action(ProtocolAction.START_CALIBRATION)
+    deadline = time.time() + 10.0
+    while not updates and time.time() < deadline:
+        time.sleep(0.05)
+    assert updates
+    managed.engine.request_action(ProtocolAction.START_CHALLENGE)
+    thread.join(timeout=20.0)
+    assert not thread.is_alive()
+    assert result_box["result"].n_trials > 0
+
+
+def test_immediate_decision_parameter_change_is_logged(tmp_path):
+    config = load_config("configs/kalunga_v0.yaml")
+    config.experiment.mode = "classifier_smoke"
+    config.output.console = False
+    managed = build_realtime_experiment(config, artifact_dir=tmp_path)
+    managed.engine.request_action(ProtocolAction.UPDATE_DECISION_PARAMS, {"posterior_threshold": 0.5})
+    result = managed.run()
+    assert result.n_trials > 0
+    log = (tmp_path / "parameter_change_log.csv").read_text(encoding="utf-8")
+    assert "decision.posterior_threshold" in log
+    assert "False" in log
 
 
 def test_replay_features_match_offline_features_synthetic():

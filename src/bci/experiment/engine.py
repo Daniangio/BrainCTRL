@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import csv
 import json
+import queue
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -15,13 +16,22 @@ from bci.experiment.bus import EventBus
 from bci.experiment.events import (
     CalibrationBatchReady,
     CalibrationStatus,
+    ChallengeRoundFinished,
     DecisionEmitted,
     EEGWindowReady,
     ExperimentFinished,
     FeatureComputed,
+    FinalTestFinished,
+    FitFailed,
+    FitStarted,
+    GroundTruthChanged,
     ModelUpdated,
+    ParameterChanged,
     PhaseChanged,
     PredictionProduced,
+    ProtocolReady,
+    ReplayPaused,
+    ReplaySpeedChanged,
     StreamConnected,
     TrialCompleted,
     TrialStarted,
@@ -31,6 +41,8 @@ from bci.features.base import FeatureExtractor
 from bci.inference.decision import DecisionPolicy
 from bci.models.base import Decoder
 from bci.preprocessing.base import Preprocessor
+from bci.protocol.state_machine import ProtocolAction, ProtocolCommand, ProtocolStateMachine
+from bci.replay.clock import ReplayClock
 from bci.sinks.base import CommandSink
 from bci.sources.base import EEGSource, EventSource
 from bci.utils.timing import utc_run_id
@@ -59,6 +71,8 @@ class RealtimeExperimentEngine:
         split_by_event: dict[int, str],
         streaming_preprocessor=None,
         protocol_entries=None,
+        replay_clock: ReplayClock | None = None,
+        publisher=None,
         artifact_dir: Path | None = None,
     ):
         self.config = config
@@ -73,20 +87,34 @@ class RealtimeExperimentEngine:
         self.split_by_event = split_by_event
         self.streaming_preprocessor = streaming_preprocessor
         self.protocol_entries = protocol_entries or []
+        self.clock = replay_clock or ReplayClock(config.source.replay.speed)
+        self.publisher = publisher
         self.artifact_dir = artifact_dir or config.project.artifact_dir / utc_run_id("experiment")
         self._stop = False
-        self._phase = CalibrationPhase.BOOTSTRAP
+        self._state_machine = ProtocolStateMachine(
+            CalibrationPhase.READY if config.experiment.manual_start else CalibrationPhase.BOOTSTRAP
+        )
+        self._phase = self._state_machine.state
         self._calibration: list[FeatureRecord] = []
         self._validation_predictions: list[Prediction] = []
         self._test_predictions: list[Prediction] = []
+        self._validation_decisions: list[Decision] = []
+        self._test_decisions: list[Decision] = []
         self._all_features: list[FeatureRecord] = []
         self._history: list[dict[str, Any]] = []
         self._decisions: list[Decision] = []
+        self._parameter_changes: list[dict[str, Any]] = []
         self._new_source_events_since_fit: set[int] = set()
         self._fitted_source_events: set[int] = set()
+        self._actions: queue.Queue[ProtocolCommand] = queue.Queue()
 
     def stop(self) -> None:
         self._stop = True
+
+    def request_action(self, action: ProtocolAction | str, payload: dict | None = None) -> None:
+        if isinstance(action, str):
+            action = ProtocolAction(action)
+        self._actions.put(ProtocolCommand(action, payload or {}))
 
     def run(self) -> ExperimentResult:
         self.artifact_dir.mkdir(parents=True, exist_ok=True)
@@ -95,6 +123,18 @@ class RealtimeExperimentEngine:
             from bci.protocol.allocation import write_protocol_manifest
 
             write_protocol_manifest(self.protocol_entries, self.artifact_dir / "protocol_manifest.csv")
+        self.bus.publish(ProtocolReady(self._phase, self._protocol_summary()))
+        if self.config.experiment.manual_start:
+            self.clock.pause()
+            self.bus.publish(ReplayPaused(True))
+            while not self._stop and self._phase == CalibrationPhase.READY:
+                self._drain_actions()
+                time.sleep(self.config.experiment.poll_interval_seconds)
+        if self._stop:
+            metrics = {"validation": {"n": 0}, "test": {"n": 0}, "n_features": 0}
+            return ExperimentResult(self.artifact_dir, metrics, 0, self.decoder.model_version)
+        if self.publisher is not None:
+            self.publisher.start()
         metadata = self.eeg_source.connect()
         if self.streaming_preprocessor is not None:
             self.streaming_preprocessor.reset(metadata)
@@ -103,14 +143,20 @@ class RealtimeExperimentEngine:
         ring = TimestampedRingBuffer(self.config.source.lsl.buffer_seconds, metadata.sfreq, metadata.ch_names)
         trial_builder = RealtimeTrialBuilder(self.config, self.split_by_event)
         idle_started = time.monotonic()
-        self._set_phase(CalibrationPhase.CALIBRATING)
+        if not self.config.experiment.manual_start:
+            self._set_phase(CalibrationPhase.CALIBRATION_STREAMING)
         try:
             while not self._stop:
+                self._drain_actions()
+                if self.clock.paused and not self.clock.consume_step():
+                    time.sleep(self.config.experiment.poll_interval_seconds)
+                    continue
                 chunk = self._poll_eeg()
                 if chunk is not None:
                     if self.streaming_preprocessor is not None:
                         chunk = self.streaming_preprocessor.process_chunk(chunk)
                     ring.append(chunk)
+                    self.clock.wait_for_chunk(chunk.data.shape[1] / chunk.sfreq)
                     idle_started = time.monotonic()
                     self.bus.publish(EEGWindowReady(chunk))
                     if hasattr(self.event_source, "advance_to") and ring.latest_time is not None:
@@ -119,6 +165,9 @@ class RealtimeExperimentEngine:
                     pending = trial_builder.add_event(event)
                     if pending is not None:
                         self.bus.publish(TrialStarted(event))
+                        split_key = (event.event_index or 0) * 1000
+                        split = self.split_by_event.get(split_key, self.split_by_event.get(event.event_index or 0))
+                        self.bus.publish(GroundTruthChanged(event.command, event.native_label, event.event_index, split))
                 for trial in trial_builder.resolve(ring):
                     self.bus.publish(TrialCompleted(trial))
                     feature = self.feature_extractor.transform(self.preprocessor.transform(trial))
@@ -135,6 +184,8 @@ class RealtimeExperimentEngine:
         finally:
             self.event_source.close()
             self.eeg_source.close()
+            if self.publisher is not None:
+                self.publisher.stop()
         metrics = self._finalize()
         result = ExperimentResult(
             artifact_dir=self.artifact_dir,
@@ -152,7 +203,7 @@ class RealtimeExperimentEngine:
 
     def _route_feature(self, feature: FeatureRecord) -> None:
         if feature.split == "calibration":
-            self._set_phase(CalibrationPhase.CALIBRATING)
+            self._set_phase(CalibrationPhase.CALIBRATION_STREAMING)
             self._calibration.append(feature)
             source_event_id = int(feature.provenance.get("source_event_id", feature.provenance["event_index"]))
             if source_event_id not in self._fitted_source_events:
@@ -164,12 +215,12 @@ class RealtimeExperimentEngine:
             self.bus.publish(self._calibration_status())
             return
         if feature.split == "validation":
-            self._set_phase(CalibrationPhase.VALIDATING)
-            self._predict_and_emit(feature, self._validation_predictions)
+            self._set_phase(CalibrationPhase.CHALLENGE_STREAMING)
+            self._predict_and_emit(feature, self._validation_predictions, self._validation_decisions)
             return
         if feature.split == "test":
-            self._set_phase(CalibrationPhase.FROZEN_TEST)
-            self._predict_and_emit(feature, self._test_predictions)
+            self._set_phase(CalibrationPhase.FINAL_TEST_STREAMING)
+            self._predict_and_emit(feature, self._test_predictions, self._test_decisions)
             return
         if feature.split == "reserve":
             return
@@ -191,6 +242,8 @@ class RealtimeExperimentEngine:
                 "refit_on_all_accumulated_data=false requires a decoder with true incremental updates; "
                 f"{type(self.decoder).__name__} currently supports cumulative refitting only"
             )
+        self._set_phase(CalibrationPhase.CALIBRATION_FITTING)
+        self.bus.publish(FitStarted(self.decoder.model_version + 1, self._n_unique_calibration_events()))
         self.decoder.update(self._calibration)
         try:
             diagnostics = self.decoder.diagnostics(self._calibration)
@@ -217,6 +270,10 @@ class RealtimeExperimentEngine:
         self._new_source_events_since_fit.clear()
         self.decision_policy.reset()
         self.bus.publish(ModelUpdated(self.decoder.model_version, metrics, diagnostics))
+        self._set_phase(CalibrationPhase.CALIBRATION_READY)
+        if self.config.experiment.manual_start:
+            self.clock.pause()
+            self.bus.publish(ReplayPaused(True))
         return True
 
     def _calibration_status(self) -> CalibrationStatus:
@@ -264,9 +321,10 @@ class RealtimeExperimentEngine:
     def _n_unique_calibration_events(self) -> int:
         return len({int(r.provenance.get("source_event_id", r.provenance["event_index"])) for r in self._calibration})
 
-    def _predict_and_emit(self, feature: FeatureRecord, sink: list[Prediction]) -> None:
+    def _predict_and_emit(self, feature: FeatureRecord, sink: list[Prediction], decision_sink: list[Decision] | None = None) -> None:
         if self.decoder.model_version == 0:
-            self._maybe_update_model()
+            if not self._maybe_update_model():
+                self.bus.publish(FitFailed("model unavailable; calibration requirements are not satisfied"))
         if self.decoder.model_version == 0:
             return
         probs = self.decoder.predict(feature)
@@ -284,6 +342,8 @@ class RealtimeExperimentEngine:
         self.bus.publish(PredictionProduced(prediction))
         decision = self.decision_policy.update(prediction)
         self._decisions.append(decision)
+        if decision_sink is not None:
+            decision_sink.append(decision)
         self.bus.publish(DecisionEmitted(decision))
         for command_sink in self.sinks:
             command_sink.emit(decision)
@@ -293,6 +353,7 @@ class RealtimeExperimentEngine:
             return
         old = self._phase
         self._phase = phase
+        self._state_machine.state = phase
         self.bus.publish(PhaseChanged(old, phase))
 
     def _is_complete(self) -> bool:
@@ -308,15 +369,108 @@ class RealtimeExperimentEngine:
             "test": summarize_predictions(self._test_predictions, classes) if self._test_predictions else {"n": 0},
             "n_features": len(self._all_features),
         }
+        if self._validation_predictions:
+            passed = self._challenge_passed(metrics["validation"])
+            self.bus.publish(ChallengeRoundFinished(metrics["validation"], passed))
+            metrics["challenge_passed"] = passed
+        if self._test_predictions:
+            self.bus.publish(FinalTestFinished(metrics["test"]))
         if self.config.experiment.mode in {"synthetic", "classifier_smoke", "controller_smoke"}:
             metrics["smoke"] = self._smoke_summary()
         (self.artifact_dir / "metrics.json").write_text(json.dumps(metrics, indent=2), encoding="utf-8")
         self._write_features()
         self._write_predictions("predictions_validation.csv", self._validation_predictions)
         self._write_predictions("predictions_test.csv", self._test_predictions)
+        self._write_predictions("challenge_predictions.csv", self._validation_predictions)
+        self._write_predictions("final_test_predictions.csv", self._test_predictions)
         self._write_history()
         self._write_decisions()
+        self._write_decisions_file("challenge_decisions.csv", self._validation_decisions)
+        self._write_decisions_file("final_test_decisions.csv", self._test_decisions)
+        self._write_parameter_changes()
+        if self._test_predictions:
+            (self.artifact_dir / "final_test_metrics.json").write_text(json.dumps(metrics["test"], indent=2), encoding="utf-8")
+        (self.artifact_dir / "run_summary.json").write_text(json.dumps(metrics, indent=2), encoding="utf-8")
+        self._set_phase(CalibrationPhase.FINISHED)
         return metrics
+
+    def _drain_actions(self) -> None:
+        while True:
+            try:
+                command = self._actions.get_nowait()
+            except queue.Empty:
+                return
+            self._handle_action(command)
+
+    def _handle_action(self, command: ProtocolCommand) -> None:
+        action = command.action
+        payload = command.payload or {}
+        if action == ProtocolAction.PAUSE:
+            self.clock.pause()
+            self.bus.publish(ReplayPaused(True))
+            return
+        if action == ProtocolAction.RESUME:
+            self.clock.resume()
+            self.bus.publish(ReplayPaused(False))
+            return
+        if action == ProtocolAction.STEP:
+            self.clock.step()
+            return
+        if action == ProtocolAction.SET_SPEED:
+            speed = float(payload["speed"])
+            self.clock.set_speed(speed)
+            self.config.source.replay.speed = speed
+            self.bus.publish(ReplaySpeedChanged(speed))
+            return
+        if action == ProtocolAction.UPDATE_DECISION_PARAMS:
+            self._update_decision_params(payload)
+            return
+        new_state = self._state_machine.transition(action)
+        self._set_phase(new_state)
+        if action == ProtocolAction.START_CALIBRATION:
+            self.clock.resume()
+            self.bus.publish(ReplayPaused(False))
+        elif action == ProtocolAction.START_CHALLENGE:
+            self.decision_policy.reset()
+            self.clock.resume()
+        elif action == ProtocolAction.START_FINAL_TEST:
+            self.decision_policy.reset()
+            self.clock.resume()
+
+    def _update_decision_params(self, payload: dict[str, Any]) -> None:
+        for key in ["posterior_threshold", "alpha", "consecutive_windows", "refractory_seconds"]:
+            if key not in payload:
+                continue
+            old = getattr(self.config.decision, key)
+            new = payload[key]
+            setattr(self.config.decision, key, new)
+            self._parameter_changes.append(
+                {
+                    "timestamp": time.time(),
+                    "phase": self._phase.value,
+                    "parameter": f"decision.{key}",
+                    "old_value": old,
+                    "new_value": new,
+                    "requires_refit": False,
+                    "model_version_before": self.decoder.model_version,
+                    "model_version_after": self.decoder.model_version,
+                }
+            )
+            self.bus.publish(ParameterChanged(f"decision.{key}", old, new, False, self.decoder.model_version))
+
+    def _protocol_summary(self) -> dict[str, Any]:
+        counts: dict[str, int] = {}
+        for entry in self.protocol_entries:
+            key = f"{entry.role}:{entry.command}"
+            counts[key] = counts.get(key, 0) + 1
+        return {"n_events": len(self.protocol_entries), "counts": counts}
+
+    def _challenge_passed(self, metrics: dict[str, Any]) -> bool:
+        if not metrics or metrics.get("n", 0) < self.config.protocol.challenge.minimum_events:
+            return False
+        if metrics.get(self.config.protocol.challenge.metric, 0.0) < self.config.protocol.challenge.pass_threshold:
+            return False
+        return metrics.get("false_commands_per_minute_rest", 0.0) <= self.config.protocol.challenge.max_false_commands_per_minute
 
     def _smoke_summary(self) -> dict[str, Any]:
         emitted = [d.command for d in self._decisions if d.command and d.command != "NONE"]
@@ -387,7 +541,10 @@ class RealtimeExperimentEngine:
             writer.writerows(self._history)
 
     def _write_decisions(self) -> None:
-        with (self.artifact_dir / "decisions.csv").open("w", newline="", encoding="utf-8") as f:
+        self._write_decisions_file("decisions.csv", self._decisions)
+
+    def _write_decisions_file(self, name: str, decisions: list[Decision]) -> None:
+        with (self.artifact_dir / name).open("w", newline="", encoding="utf-8") as f:
             writer = csv.DictWriter(
                 f,
                 fieldnames=[
@@ -403,7 +560,7 @@ class RealtimeExperimentEngine:
                 ],
             )
             writer.writeheader()
-            for d in self._decisions:
+            for d in decisions:
                 writer.writerow(
                     {
                         "timestamp": d.timestamp,
@@ -417,3 +574,21 @@ class RealtimeExperimentEngine:
                         "probabilities": json.dumps(d.probabilities, sort_keys=True),
                     }
                 )
+
+    def _write_parameter_changes(self) -> None:
+        with (self.artifact_dir / "parameter_change_log.csv").open("w", newline="", encoding="utf-8") as f:
+            writer = csv.DictWriter(
+                f,
+                fieldnames=[
+                    "timestamp",
+                    "phase",
+                    "parameter",
+                    "old_value",
+                    "new_value",
+                    "requires_refit",
+                    "model_version_before",
+                    "model_version_after",
+                ],
+            )
+            writer.writeheader()
+            writer.writerows(self._parameter_changes)

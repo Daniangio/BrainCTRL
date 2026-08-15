@@ -51,3 +51,5 @@ V1.2 also writes `protocol_manifest.csv` before processing. It labels original e
 - `final_test`
 
 Reserve calibration events are not fitted by the default linear smoke run. They are preserved for the interactive append-calibration loop.
+
+In GUI mode the engine starts in `READY`; press `Start Calibration` to begin. After the first model fit, replay pauses in `CALIBRATION_READY` so the user can inspect diagnostics before pressing `Start Challenge`.
