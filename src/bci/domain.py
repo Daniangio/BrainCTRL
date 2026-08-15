@@ -87,6 +87,8 @@ class FeatureRecord:
     frequency_scores: dict[str, float]
     provenance: dict[str, Any]
     config_hash: str
+    spectral_freqs: np.ndarray | None = None
+    log_power: np.ndarray | None = None
 
 
 @dataclass(frozen=True)
@@ -107,6 +109,10 @@ class Decision:
     probabilities: dict[str, float]
     confidence: float
     model_version: int
+    reason: str = "unspecified"
+    threshold: float | None = None
+    consecutive: int = 0
+    required_consecutive: int = 0
 
 
 @dataclass

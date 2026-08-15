@@ -34,4 +34,7 @@ class ProbabilityPanel:
             self.bars[cls].setValue(int(round(prob * 100)))
 
     def update_decision(self, decision: Decision) -> None:
-        self.decision.setText(f"decision: {decision.command} | evidence {decision.confidence:.2f}")
+        self.decision.setText(
+            f"decision: {decision.command} | evidence {decision.confidence:.2f} | "
+            f"{decision.reason} | {decision.consecutive}/{decision.required_consecutive}"
+        )

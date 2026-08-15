@@ -29,7 +29,11 @@ else
 fi
 
 # shellcheck disable=SC1091
-source .venv/bin/activate
+if [ -d ".venv/Scripts" ]; then
+    source .venv/Scripts/activate     # Se rileva Windows (Git Bash)
+else
+    source .venv/bin/activate        # Se rileva Linux / macOS / WSL
+fi
 
 python -m pip install --upgrade pip setuptools wheel
 python -m pip install -r requirements.txt

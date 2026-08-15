@@ -2,7 +2,17 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from bci.domain import BCIEvent, CalibrationPhase, Decision, EEGChunk, EEGMetadata, FeatureRecord, Prediction, TrialRecord
+from bci.domain import (
+    BCIEvent,
+    CalibrationPhase,
+    Decision,
+    DecoderDiagnostics,
+    EEGChunk,
+    EEGMetadata,
+    FeatureRecord,
+    Prediction,
+    TrialRecord,
+)
 
 
 @dataclass(frozen=True)
@@ -43,9 +53,21 @@ class CalibrationBatchReady:
 
 
 @dataclass(frozen=True)
+class CalibrationStatus:
+    counts: dict[str, int]
+    required_per_class: int
+    batch_size: int
+    n_total: int
+    model_version: int
+    ready_to_fit: bool
+    reason: str
+
+
+@dataclass(frozen=True)
 class ModelUpdated:
     model_version: int
     metrics: dict
+    diagnostics: DecoderDiagnostics | None = None
 
 
 @dataclass(frozen=True)

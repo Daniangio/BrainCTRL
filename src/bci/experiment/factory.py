@@ -49,7 +49,10 @@ def build_realtime_experiment(config: BCIConfig, bus: EventBus | None = None, ar
         sinks.append(ConsoleCommandSink())
     if config.output.udp.enabled:
         sinks.append(UDPCommandSink(config.output.udp))
-    if config.experiment.mode == "synthetic":
+    if config.experiment.mode in {"synthetic", "classifier_smoke", "controller_smoke"}:
+        if config.experiment.mode in {"synthetic", "classifier_smoke"}:
+            config.decision.consecutive_windows = 1
+            config.decision.alpha = 1.0
         eeg_source, event_source, split_by_event = build_synthetic_sources(config)
         publisher = None
     else:
@@ -84,18 +87,25 @@ def build_synthetic_sources(config: BCIConfig):
     sfreq = 128.0
     ch_names = ["Oz", "O1"]
     events: list[BCIEvent] = []
-    commands = [("13", "LEFT", 13.0), ("21", "RIGHT", 21.0), ("rest", "NONE", 7.0)] * 4
-    gap = config.trials.window_seconds + config.trials.onset_offset_seconds + 0.35
+    mode = "classifier_smoke" if config.experiment.mode == "synthetic" else config.experiment.mode
+    repeats = 4 if mode == "classifier_smoke" else 5
+    commands = [("13", "LEFT", 13.0), ("21", "RIGHT", 21.0), ("rest", "NONE", 7.0)] * repeats
+    duration = (
+        config.trials.window_seconds + config.trials.onset_offset_seconds
+        if mode == "classifier_smoke"
+        else 4.0
+    )
+    gap = duration + 0.35
     total_seconds = gap * len(commands) + 1.0
     times = np.arange(int(total_seconds * sfreq)) / sfreq
-    data = 0.03 * np.sin(2 * np.pi * 3.0 * times)[None, :]
-    data = np.repeat(data, len(ch_names), axis=0)
+    rng = np.random.default_rng(config.project.seed)
+    data = _background_signal(times, len(ch_names), rng, config.experiment.synthetic_difficulty)
     for idx, (native, command, freq) in enumerate(commands):
         onset = 0.5 + idx * gap
         events.append(
             BCIEvent(
                 timestamp=onset,
-                duration=config.trials.window_seconds + config.trials.onset_offset_seconds,
+                duration=duration,
                 native_label=native,
                 command=command,
                 event_index=idx,
@@ -106,15 +116,66 @@ def build_synthetic_sources(config: BCIConfig):
             )
         )
         start = onset + config.trials.onset_offset_seconds
-        stop = start + config.trials.window_seconds
+        stop = onset + duration
         mask = (times >= start) & (times < stop)
-        if command != "NONE":
-            data[:, mask] += np.sin(2 * np.pi * freq * times[mask])[None, :]
+        _inject_trial_signal(data, times, mask, command, freq, rng, config.experiment.synthetic_difficulty)
+    base_trials = _synthetic_trial_records(config, events, sfreq, ch_names)
+    split_manifest = ChronologicalTrialSplit(config).assign(base_trials)
+    split_by_event: dict[int, str] = {}
+    for event in events:
+        split = split_manifest[f"Synthetic-s1-0-0-e{event.event_index}"]
+        if mode == "controller_smoke":
+            n_windows = _num_controller_windows(config, event.duration)
+            for window_index in range(n_windows):
+                split_by_event[(event.event_index or 0) * 1000 + window_index] = split
         else:
-            data[:, mask] += 0.15 * np.sin(2 * np.pi * freq * times[mask])[None, :]
-    split_manifest = ChronologicalTrialSplit(config).assign(_synthetic_trial_records(config, events, sfreq, ch_names))
-    split_by_event = {event.event_index or 0: split_manifest[f"Synthetic-s1-0-0-e{event.event_index}"] for event in events}
+            split_by_event[event.event_index or 0] = split
     return ScriptedSyntheticEEGSource(data, sfreq, ch_names, chunk_samples=8), SyntheticEventSource(events), split_by_event
+
+
+def _background_signal(times: np.ndarray, n_channels: int, rng: np.random.Generator, difficulty: str) -> np.ndarray:
+    noise = {"perfect": 0.0, "easy": 0.08, "noisy": 0.22}[difficulty]
+    drift = 0.03 * np.sin(2 * np.pi * 1.0 * times)
+    data = np.repeat(drift[None, :], n_channels, axis=0)
+    if noise:
+        data += rng.normal(0.0, noise, size=data.shape)
+    return data
+
+
+def _inject_trial_signal(
+    data: np.ndarray,
+    times: np.ndarray,
+    mask: np.ndarray,
+    command: str,
+    freq: float,
+    rng: np.random.Generator,
+    difficulty: str,
+) -> None:
+    if not np.any(mask):
+        return
+    if command == "NONE":
+        amp = {"perfect": 0.03, "easy": 0.06, "noisy": 0.10}[difficulty]
+    else:
+        amp = {"perfect": 1.0, "easy": 0.8, "noisy": 0.45}[difficulty]
+    harmonic = {"perfect": 0.0, "easy": 0.18, "noisy": 0.12}[difficulty]
+    for ch in range(data.shape[0]):
+        phase = rng.uniform(0, 2 * np.pi)
+        phase2 = rng.uniform(0, 2 * np.pi)
+        channel_scale = 1.0 - ch * 0.18
+        if command == "NONE":
+            data[ch, mask] += amp * np.sin(2 * np.pi * freq * times[mask] + phase)
+        else:
+            data[ch, mask] += channel_scale * amp * np.sin(2 * np.pi * freq * times[mask] + phase)
+            data[ch, mask] += channel_scale * harmonic * np.sin(2 * np.pi * 2 * freq * times[mask] + phase2)
+
+
+def _num_controller_windows(config: BCIConfig, duration: float) -> int:
+    start = config.trials.onset_offset_seconds
+    count = 0
+    while start + config.trials.window_seconds <= duration + 1e-9:
+        count += 1
+        start += config.trials.inference_stride_seconds
+    return count
 
 
 def _synthetic_trial_records(config: BCIConfig, events: list[BCIEvent], sfreq: float, ch_names: list[str]):

@@ -151,11 +151,20 @@ class EvaluationConfig(BaseModel):
 
 
 class ExperimentConfig(BaseModel):
-    mode: Literal["labeled_replay", "offline_fast", "bootstrap_only", "live_lsl", "synthetic"] = "labeled_replay"
+    mode: Literal[
+        "labeled_replay",
+        "offline_fast",
+        "bootstrap_only",
+        "live_lsl",
+        "synthetic",
+        "classifier_smoke",
+        "controller_smoke",
+    ] = "labeled_replay"
     gui: bool = False
     max_trials: int | None = None
     poll_interval_seconds: float = 0.01
     max_idle_seconds: float = 15.0
+    synthetic_difficulty: Literal["perfect", "easy", "noisy"] = "easy"
 
 
 class GUIConfig(BaseModel):

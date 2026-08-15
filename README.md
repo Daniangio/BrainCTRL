@@ -32,7 +32,8 @@ Useful direct commands:
 python -m bci.cli bootstrap  --config configs/kalunga_v0.yaml
 python -m bci.cli evaluate   --config configs/kalunga_v0.yaml
 python -m bci.cli experiment --config configs/kalunga_v0.yaml --gui
-python -m bci.cli experiment --config configs/kalunga_v0.yaml --synthetic --no-gui
+python -m bci.cli experiment --config configs/kalunga_v0.yaml --smoke-mode classifier --no-gui
+python -m bci.cli experiment --config configs/kalunga_v0.yaml --smoke-mode controller --no-gui
 ```
 
 ## Flow

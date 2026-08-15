@@ -27,3 +27,18 @@ event marker
 ```
 
 Calibration trials can update the decoder. Validation and test trials cannot update parameters. Every run writes features, predictions, calibration history, decisions, metrics, models, and resolved config under `artifacts/`.
+
+## Smoke Tutorials
+
+Two synthetic smoke modes are available before running MOABB:
+
+```bash
+python -m bci.cli experiment --config configs/kalunga_v0.yaml --smoke-mode classifier --no-gui
+python -m bci.cli experiment --config configs/kalunga_v0.yaml --smoke-mode controller --no-gui
+```
+
+`classifier_smoke` uses one prediction per trial and sets `consecutive_windows=1`, so it checks feature extraction and Bayesian decoding directly.
+
+`controller_smoke` uses longer stimulus blocks and sliding windows every configured stride, so it checks posterior smoothing and consecutive-window command emission.
+
+Both modes write a `smoke` section in `metrics.json` explaining the purpose, expected behavior, emitted commands, and decision reasons.

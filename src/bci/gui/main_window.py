@@ -6,11 +6,14 @@ from bci.experiment.events import (
     EEGWindowReady,
     ExperimentFinished,
     FeatureComputed,
+    CalibrationBatchReady,
+    CalibrationStatus,
     ModelUpdated,
     PhaseChanged,
     PredictionProduced,
     StreamConnected,
     TrialCompleted,
+    TrialStarted,
 )
 from bci.gui.panels.calibration import CalibrationPanel
 from bci.gui.panels.latent import LatentPanel
@@ -69,6 +72,10 @@ class MainWindow:
             self.calibration.set_phase(event.new_phase.value)
         elif isinstance(event, EEGWindowReady):
             self.signal.update_chunk(event.chunk)
+        elif isinstance(event, TrialStarted):
+            self.calibration.start_trial(event.event)
+        elif isinstance(event, CalibrationBatchReady):
+            self.calibration.set_batch(event.n_batch, event.n_total)
         elif isinstance(event, TrialCompleted):
             self.calibration.add_trial(event.trial)
         elif isinstance(event, FeatureComputed):
@@ -76,7 +83,9 @@ class MainWindow:
         elif isinstance(event, ModelUpdated):
             self.status.set_model(event.model_version)
             self.calibration.set_model(event.model_version, event.metrics)
-            self.latent.update_metrics(event.metrics)
+            self.latent.update_diagnostics(event.diagnostics)
+        elif isinstance(event, CalibrationStatus):
+            self.calibration.set_status(event)
         elif isinstance(event, PredictionProduced):
             self.probabilities.update_prediction(event.prediction)
         elif isinstance(event, DecisionEmitted):

@@ -13,6 +13,7 @@ class PendingTrial:
     start: float
     end: float
     split: str
+    window_index: int = 0
 
 
 class RealtimeTrialBuilder:
@@ -25,12 +26,24 @@ class RealtimeTrialBuilder:
     def add_event(self, event: BCIEvent) -> PendingTrial | None:
         if event.command is None:
             return None
-        start = event.timestamp + self.config.trials.onset_offset_seconds
-        end = start + self.config.trials.window_seconds
-        split = self.split_by_event.get(event.event_index if event.event_index is not None else self.completed_count, "inference")
-        pending = PendingTrial(event=event, start=start, end=end, split=split)
-        self.pending.append(pending)
-        return pending
+        first_pending: PendingTrial | None = None
+        event_index = event.event_index if event.event_index is not None else self.completed_count
+        starts = [event.timestamp + self.config.trials.onset_offset_seconds]
+        if self.config.experiment.mode == "controller_smoke" and event.duration > self.config.trials.window_seconds:
+            starts = []
+            start = event.timestamp + self.config.trials.onset_offset_seconds
+            latest_end = event.timestamp + event.duration
+            while start + self.config.trials.window_seconds <= latest_end + 1e-9:
+                starts.append(start)
+                start += self.config.trials.inference_stride_seconds
+        for window_index, start in enumerate(starts):
+            end = start + self.config.trials.window_seconds
+            split_key = event_index * 1000 + window_index
+            split = self.split_by_event.get(split_key, self.split_by_event.get(event_index, "inference"))
+            pending = PendingTrial(event=event, start=start, end=end, split=split, window_index=window_index)
+            self.pending.append(pending)
+            first_pending = first_pending or pending
+        return first_pending
 
     def resolve(self, buffer: TimestampedRingBuffer) -> list[TrialRecord]:
         completed: list[TrialRecord] = []
@@ -42,11 +55,12 @@ class RealtimeTrialBuilder:
                 continue
             chunk = buffer.slice(pending.start, pending.end, expected_samples=expected_samples)
             event = pending.event
-            idx = event.event_index if event.event_index is not None else self.completed_count
+            original_idx = event.event_index if event.event_index is not None else self.completed_count
+            idx = original_idx * 1000 + pending.window_index
             trial_id = (
                 f"{event.dataset or self.config.dataset.name}-"
                 f"s{event.subject or (self.config.dataset.subjects[0] if self.config.dataset.subjects else 0)}-"
-                f"{event.session or 'stream'}-{event.run or 'stream'}-e{idx}"
+                f"{event.session or 'stream'}-{event.run or 'stream'}-e{original_idx}-w{pending.window_index}"
             )
             completed.append(
                 TrialRecord(

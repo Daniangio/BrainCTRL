@@ -64,8 +64,12 @@ class SpectralFeatureExtractor(FeatureExtractor):
                 "run": trial.run,
                 "event_index": trial.event_index,
                 "native_label": trial.native_label,
+                "start_time": trial.start_time,
+                "end_time": trial.end_time,
             },
             config_hash=self.config_hash,
+            spectral_freqs=freqs.copy(),
+            log_power=log_power.mean(axis=0),
         )
 
     def _local_log_snr(self, freqs: np.ndarray, log_power: np.ndarray, target: float) -> float:

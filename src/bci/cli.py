@@ -25,6 +25,8 @@ def main(argv: list[str] | None = None) -> int:
         gui_group.add_argument("--gui", action="store_true")
         gui_group.add_argument("--no-gui", action="store_true")
         p.add_argument("--synthetic", action="store_true")
+        p.add_argument("--smoke-mode", choices=["classifier", "controller"])
+        p.add_argument("--synthetic-difficulty", choices=["perfect", "easy", "noisy"])
     args = parser.parse_args(argv)
     config = load_config(args.config)
     config = apply_overrides(config, args)
@@ -94,9 +96,21 @@ def apply_overrides(config, args):
         config.experiment.gui = False
         config.gui.enabled = False
     if getattr(args, "synthetic", False):
-        config.experiment.mode = "synthetic"
+        config.experiment.mode = "classifier_smoke"
         config.output.console = False
         config.experiment.max_idle_seconds = 2.0
+    if getattr(args, "smoke_mode", None) == "classifier":
+        config.experiment.mode = "classifier_smoke"
+        config.decision.consecutive_windows = 1
+        config.decision.alpha = 1.0
+        config.output.console = False
+        config.experiment.max_idle_seconds = 2.0
+    if getattr(args, "smoke_mode", None) == "controller":
+        config.experiment.mode = "controller_smoke"
+        config.output.console = False
+        config.experiment.max_idle_seconds = 2.0
+    if getattr(args, "synthetic_difficulty", None):
+        config.experiment.synthetic_difficulty = args.synthetic_difficulty
     return config
 
 

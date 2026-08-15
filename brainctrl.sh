@@ -10,7 +10,11 @@ if [[ ! -d .venv ]]; then
 fi
 
 # shellcheck disable=SC1091
-source .venv/bin/activate
+if [ -d ".venv/Scripts" ]; then
+    source .venv/Scripts/activate     # Se rileva Windows (Git Bash)
+else
+    source .venv/bin/activate        # Se rileva Linux / macOS / WSL
+fi
 
 mapfile -t CONFIGS < <(find configs -maxdepth 1 -name '*.yaml' | sort)
 if [[ ${#CONFIGS[@]} -eq 0 ]]; then
@@ -37,7 +41,8 @@ echo "Mode:"
 echo "  1) Realtime replay"
 echo "  2) Fast offline evaluation"
 echo "  3) Bootstrap dataset only"
-echo "  4) Synthetic realtime smoke"
+echo "  4) Classifier smoke tutorial"
+echo "  5) Controller smoke tutorial"
 read -r -p "Select mode [1]: " MODE
 MODE="${MODE:-1}"
 
@@ -88,7 +93,10 @@ case "$MODE" in
     python -m bci.cli bootstrap --config "$CONFIG" --subject "$SUBJECT"
     ;;
   4)
-    python -m bci.cli experiment --config "$CONFIG" --subject "$SUBJECT" --model "$DECODER" "$GUI_FLAG" --synthetic
+    python -m bci.cli experiment --config "$CONFIG" --subject "$SUBJECT" --model "$DECODER" "$GUI_FLAG" --smoke-mode classifier
+    ;;
+  5)
+    python -m bci.cli experiment --config "$CONFIG" --subject "$SUBJECT" --model "$DECODER" "$GUI_FLAG" --smoke-mode controller
     ;;
   *)
     echo "Invalid mode choice." >&2

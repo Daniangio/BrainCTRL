@@ -78,9 +78,19 @@ def test_cli_config_overrides():
     config = load_config("configs/kalunga_v0.yaml")
     out = apply_overrides(
         config,
-        Namespace(subject=2, model="bayesian_latent", max_trials=4, gui=False, no_gui=True, synthetic=True),
+        Namespace(
+            subject=2,
+            model="bayesian_latent",
+            max_trials=4,
+            gui=False,
+            no_gui=True,
+            synthetic=True,
+            smoke_mode=None,
+            synthetic_difficulty="perfect",
+        ),
     )
     assert out.dataset.subjects == [2]
     assert out.experiment.max_trials == 4
-    assert out.experiment.mode == "synthetic"
+    assert out.experiment.mode == "classifier_smoke"
+    assert out.experiment.synthetic_difficulty == "perfect"
     assert not out.gui.enabled

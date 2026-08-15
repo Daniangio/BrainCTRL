@@ -14,6 +14,7 @@ from bci.evaluation.metrics import summarize_predictions
 from bci.experiment.bus import EventBus
 from bci.experiment.events import (
     CalibrationBatchReady,
+    CalibrationStatus,
     DecisionEmitted,
     EEGWindowReady,
     ExperimentFinished,
@@ -143,6 +144,7 @@ class RealtimeExperimentEngine:
             if len(self._calibration) % batch_size == 0:
                 self.bus.publish(CalibrationBatchReady(batch_size, len(self._calibration)))
                 self._maybe_update_model()
+            self.bus.publish(self._calibration_status())
             return
         if feature.split == "validation":
             self._set_phase(CalibrationPhase.VALIDATING)
@@ -156,13 +158,13 @@ class RealtimeExperimentEngine:
             self._set_phase(CalibrationPhase.INFERENCE)
             self._predict_and_emit(feature, self._test_predictions)
 
-    def _maybe_update_model(self) -> None:
+    def _maybe_update_model(self) -> bool:
         labels = sorted({r.label for r in self._calibration})
         if len(labels) < 2:
-            return
+            return False
         minimum = self.config.calibration.minimum_trials_per_class_before_fit
         if any(sum(r.label == label for r in self._calibration) < minimum for label in labels):
-            return
+            return False
         self.decoder.update(self._calibration)
         diagnostics = self.decoder.diagnostics(self._calibration)
         metrics = {
@@ -178,7 +180,32 @@ class RealtimeExperimentEngine:
             }
         )
         self.decoder.save(self.artifact_dir / f"model_v{self.decoder.model_version:03d}.pkl")
-        self.bus.publish(ModelUpdated(self.decoder.model_version, metrics))
+        self.bus.publish(ModelUpdated(self.decoder.model_version, metrics, diagnostics))
+        return True
+
+    def _calibration_status(self) -> CalibrationStatus:
+        required = self.config.calibration.minimum_trials_per_class_before_fit
+        counts = {label: sum(r.label == label for r in self._calibration) for label in ["LEFT", "RIGHT", "NONE"]}
+        missing = {label: max(0, required - count) for label, count in counts.items()}
+        ready = all(value == 0 for value in missing.values()) and len(self._calibration) >= self.config.calibration.batch_size_trials
+        if self.decoder.model_version > 0 and len(self._calibration) % self.config.calibration.batch_size_trials == 0:
+            reason = f"MODEL v{self.decoder.model_version} TRAINED on {len(self._calibration)} trials"
+        elif any(missing.values()):
+            needed = ", ".join(f"{label} +{value}" for label, value in missing.items() if value)
+            reason = f"collecting calibration examples: waiting for {needed}"
+        elif len(self._calibration) < self.config.calibration.batch_size_trials:
+            reason = f"waiting for batch {len(self._calibration)}/{self.config.calibration.batch_size_trials}"
+        else:
+            reason = "ready for next calibration update"
+        return CalibrationStatus(
+            counts=counts,
+            required_per_class=required,
+            batch_size=self.config.calibration.batch_size_trials,
+            n_total=len(self._calibration),
+            model_version=self.decoder.model_version,
+            ready_to_fit=ready,
+            reason=reason,
+        )
 
     def _predict_and_emit(self, feature: FeatureRecord, sink: list[Prediction]) -> None:
         if self.decoder.model_version == 0:
@@ -194,7 +221,7 @@ class RealtimeExperimentEngine:
             predicted_label=label,
             confidence=float(confidence),
             model_version=self.decoder.model_version,
-            timestamp=time.time(),
+            timestamp=float(feature.provenance.get("end_time", time.time())),
         )
         sink.append(prediction)
         self.bus.publish(PredictionProduced(prediction))
@@ -224,6 +251,8 @@ class RealtimeExperimentEngine:
             "test": summarize_predictions(self._test_predictions, classes) if self._test_predictions else {"n": 0},
             "n_features": len(self._all_features),
         }
+        if self.config.experiment.mode in {"synthetic", "classifier_smoke", "controller_smoke"}:
+            metrics["smoke"] = self._smoke_summary()
         (self.artifact_dir / "metrics.json").write_text(json.dumps(metrics, indent=2), encoding="utf-8")
         self._write_features()
         self._write_predictions("predictions_validation.csv", self._validation_predictions)
@@ -231,6 +260,34 @@ class RealtimeExperimentEngine:
         self._write_history()
         self._write_decisions()
         return metrics
+
+    def _smoke_summary(self) -> dict[str, Any]:
+        emitted = [d.command for d in self._decisions if d.command and d.command != "NONE"]
+        reasons: dict[str, int] = {}
+        for decision in self._decisions:
+            reasons[decision.reason] = reasons.get(decision.reason, 0) + 1
+        if self.config.experiment.mode == "controller_smoke":
+            purpose = "tests posterior smoothing, consecutive-window decisions, and command latency mechanics"
+            expected = "LEFT and RIGHT commands should be emitted after repeated windows once the model is trained"
+        else:
+            purpose = "tests event -> window -> FFT/features -> Bayesian decoder with one prediction per trial"
+            expected = "near-perfect validation/test classification; decisions use alpha=1.0 and consecutive_windows=1"
+        return {
+            "mode": self.config.experiment.mode,
+            "difficulty": self.config.experiment.synthetic_difficulty,
+            "purpose": purpose,
+            "expected": expected,
+            "model_version": self.decoder.model_version,
+            "n_calibration_features": len(self._calibration),
+            "n_predictions": len(self._validation_predictions) + len(self._test_predictions),
+            "emitted_commands": {command: emitted.count(command) for command in sorted(set(emitted))},
+            "decision_reasons": reasons,
+            "decision_policy": {
+                "threshold": self.config.decision.posterior_threshold,
+                "consecutive_windows": self.config.decision.consecutive_windows,
+                "alpha": self.config.decision.alpha,
+            },
+        }
 
     def _write_features(self) -> None:
         path = self.artifact_dir / "features.csv"
@@ -274,7 +331,20 @@ class RealtimeExperimentEngine:
 
     def _write_decisions(self) -> None:
         with (self.artifact_dir / "decisions.csv").open("w", newline="", encoding="utf-8") as f:
-            writer = csv.DictWriter(f, fieldnames=["timestamp", "command", "confidence", "model_version", "probabilities"])
+            writer = csv.DictWriter(
+                f,
+                fieldnames=[
+                    "timestamp",
+                    "command",
+                    "confidence",
+                    "model_version",
+                    "reason",
+                    "threshold",
+                    "consecutive",
+                    "required_consecutive",
+                    "probabilities",
+                ],
+            )
             writer.writeheader()
             for d in self._decisions:
                 writer.writerow(
@@ -283,6 +353,10 @@ class RealtimeExperimentEngine:
                         "command": d.command,
                         "confidence": d.confidence,
                         "model_version": d.model_version,
+                        "reason": d.reason,
+                        "threshold": d.threshold,
+                        "consecutive": d.consecutive,
+                        "required_consecutive": d.required_consecutive,
                         "probabilities": json.dumps(d.probabilities, sort_keys=True),
                     }
                 )
