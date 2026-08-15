@@ -1,0 +1,193 @@
+from __future__ import annotations
+
+from pathlib import Path
+from typing import Literal
+
+import yaml
+from pydantic import BaseModel, Field, model_validator
+
+
+Command = Literal["LEFT", "RIGHT", "NONE"]
+
+
+class ProjectConfig(BaseModel):
+    name: str = "ssvep_bci_v0"
+    seed: int = 42
+    data_dir: Path = Path("./data/moabb")
+    artifact_dir: Path = Path("./artifacts")
+    log_dir: Path = Path("./logs")
+
+
+class DatasetConfig(BaseModel):
+    name: str
+    subjects: list[int] = Field(default_factory=lambda: [1])
+    sessions: list[str] | None = None
+    runs: list[str] | None = None
+    download_if_missing: bool = True
+
+
+class ReplayConfig(BaseModel):
+    stream_name: str = "BCI-EEG-Replay"
+    source_id: str = "bci-moabb-replay"
+    annotations: bool = True
+    annotations_encoding: str = "one-hot"
+    repeat: int = 1
+    chunk_size_samples: int = 16
+
+
+class LSLConfig(BaseModel):
+    buffer_seconds: float = 10.0
+    acquisition_delay_seconds: float = 0.01
+
+
+class SourceConfig(BaseModel):
+    mode: Literal["moabb_replay", "lsl_live"] = "moabb_replay"
+    replay: ReplayConfig = Field(default_factory=ReplayConfig)
+    lsl: LSLConfig = Field(default_factory=LSLConfig)
+
+
+class CommandConfig(BaseModel):
+    native_to_command: dict[str, Command]
+    ignore_native_labels: list[str] = Field(default_factory=list)
+    active_commands: list[Command] = Field(default_factory=lambda: ["LEFT", "RIGHT"])
+    reject_command: Command = "NONE"
+
+    @model_validator(mode="after")
+    def validate_commands(self) -> "CommandConfig":
+        if self.reject_command not in self.native_to_command.values():
+            raise ValueError("reject_command must appear in native_to_command values")
+        if not set(self.active_commands).issubset({"LEFT", "RIGHT"}):
+            raise ValueError("active_commands may only contain LEFT/RIGHT in V0")
+        return self
+
+
+class ChannelConfig(BaseModel):
+    include: list[str] | None = None
+
+
+class PreprocessingConfig(BaseModel):
+    detrend: Literal["constant", "linear", "none"] = "constant"
+    bandpass_hz: tuple[float, float] | None = (6.0, 50.0)
+    notch_hz: float | None = 50.0
+    causal_for_streaming: bool = True
+
+
+class TrialConfig(BaseModel):
+    onset_offset_seconds: float = 0.25
+    window_seconds: float = 1.5
+    inference_stride_seconds: float = 0.25
+
+
+class FeatureConfig(BaseModel):
+    type: str = "spectral_relative_power"
+    harmonics: list[int] = Field(default_factory=lambda: [1, 2, 3])
+    local_band_half_width_hz: float = 0.5
+    neighbor_inner_gap_hz: float = 1.0
+    neighbor_outer_width_hz: float = 3.0
+    log_epsilon: float = 1.0e-12
+    standardize: bool = True
+
+
+class SplitConfig(BaseModel):
+    type: str = "chronological_trial"
+    calibration_fraction: float = 0.5
+    validation_fraction: float = 0.25
+    test_fraction: float = 0.25
+    stratify_if_possible: bool = True
+    group_unit: str = "original_trial"
+
+    @model_validator(mode="after")
+    def validate_fractions(self) -> "SplitConfig":
+        total = self.calibration_fraction + self.validation_fraction + self.test_fraction
+        if abs(total - 1.0) > 1e-6:
+            raise ValueError("split fractions must sum to 1.0")
+        return self
+
+
+class CalibrationConfig(BaseModel):
+    batch_size_trials: int = 6
+    minimum_trials_per_class_before_fit: int = 2
+    refit_on_all_accumulated_data: bool = True
+
+
+class ModelConfig(BaseModel):
+    type: str = "bayesian_latent"
+    latent_dim: int = 2
+    projection: str = "shrinkage_lda"
+    covariance: str = "shrinkage"
+    class_prior: str = "empirical"
+    regularization: float = 1.0e-3
+
+
+class BaselineConfig(BaseModel):
+    spectral_score: bool = True
+    cca: bool = True
+
+
+class DecisionConfig(BaseModel):
+    type: str = "exponential_evidence"
+    alpha: float = 0.35
+    posterior_threshold: float = 0.85
+    consecutive_windows: int = 2
+    refractory_seconds: float = 0.5
+    emit_none: bool = True
+
+
+class UDPConfig(BaseModel):
+    enabled: bool = False
+    host: str = "127.0.0.1"
+    port: int = 5005
+
+
+class OutputConfig(BaseModel):
+    console: bool = True
+    udp: UDPConfig = Field(default_factory=UDPConfig)
+
+
+class EvaluationConfig(BaseModel):
+    metrics: list[str] = Field(default_factory=list)
+    save_predictions: bool = True
+    save_latent: bool = True
+
+
+class BCIConfig(BaseModel):
+    project: ProjectConfig
+    dataset: DatasetConfig
+    source: SourceConfig = Field(default_factory=SourceConfig)
+    commands: CommandConfig
+    channels: ChannelConfig = Field(default_factory=ChannelConfig)
+    preprocessing: PreprocessingConfig = Field(default_factory=PreprocessingConfig)
+    trials: TrialConfig = Field(default_factory=TrialConfig)
+    features: FeatureConfig = Field(default_factory=FeatureConfig)
+    split: SplitConfig = Field(default_factory=SplitConfig)
+    calibration: CalibrationConfig = Field(default_factory=CalibrationConfig)
+    model: ModelConfig = Field(default_factory=ModelConfig)
+    baselines: BaselineConfig = Field(default_factory=BaselineConfig)
+    decision: DecisionConfig = Field(default_factory=DecisionConfig)
+    output: OutputConfig = Field(default_factory=OutputConfig)
+    evaluation: EvaluationConfig = Field(default_factory=EvaluationConfig)
+
+    @property
+    def stimulus_frequencies(self) -> dict[str, float]:
+        freqs: dict[str, float] = {}
+        ignored = set(self.commands.ignore_native_labels)
+        for native, command in self.commands.native_to_command.items():
+            if native in ignored or command == self.commands.reject_command:
+                continue
+            try:
+                freqs[command] = float(native)
+            except ValueError as exc:
+                raise ValueError(f"active native label {native!r} is not numeric") from exc
+        return freqs
+
+
+def load_config(path: str | Path) -> BCIConfig:
+    with Path(path).open("r", encoding="utf-8") as f:
+        data = yaml.safe_load(f)
+    return BCIConfig.model_validate(data)
+
+
+def write_resolved_config(config: BCIConfig, path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8") as f:
+        yaml.safe_dump(config.model_dump(mode="json"), f, sort_keys=False)

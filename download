@@ -1,0 +1,111 @@
+project:
+  name: ssvep_bci_v0
+  seed: 42
+  data_dir: ./data/moabb
+  artifact_dir: ./artifacts
+  log_dir: ./logs
+
+dataset:
+  name: Kalunga2016
+  subjects: [1]
+  sessions: null
+  runs: null
+  download_if_missing: true
+
+source:
+  mode: moabb_replay
+  replay:
+    stream_name: BCI-EEG-Replay
+    source_id: bci-moabb-kalunga-subject1
+    annotations: true
+    annotations_encoding: one-hot
+    repeat: 1
+    chunk_size_samples: 16
+  lsl:
+    buffer_seconds: 10.0
+    acquisition_delay_seconds: 0.01
+
+commands:
+  native_to_command:
+    "13": LEFT
+    "21": RIGHT
+    "rest": NONE
+  ignore_native_labels: ["17"]
+  active_commands: [LEFT, RIGHT]
+  reject_command: NONE
+
+channels:
+  # Leave empty/null initially to use all EEG channels exposed by the dataset.
+  # Later experiments should compare posterior/occipital subsets explicitly.
+  include: null
+
+preprocessing:
+  detrend: constant
+  bandpass_hz: [6.0, 50.0]
+  notch_hz: 50.0
+  causal_for_streaming: true
+
+trials:
+  onset_offset_seconds: 0.25
+  window_seconds: 1.5
+  inference_stride_seconds: 0.25
+
+features:
+  type: spectral_relative_power
+  harmonics: [1, 2, 3]
+  local_band_half_width_hz: 0.5
+  neighbor_inner_gap_hz: 1.0
+  neighbor_outer_width_hz: 3.0
+  log_epsilon: 1.0e-12
+  standardize: true
+
+split:
+  type: chronological_trial
+  calibration_fraction: 0.50
+  validation_fraction: 0.25
+  test_fraction: 0.25
+  stratify_if_possible: true
+  group_unit: original_trial
+
+calibration:
+  batch_size_trials: 6
+  minimum_trials_per_class_before_fit: 2
+  refit_on_all_accumulated_data: true
+
+model:
+  type: bayesian_latent
+  latent_dim: 2
+  projection: shrinkage_lda
+  covariance: shrinkage
+  class_prior: empirical
+  regularization: 1.0e-3
+
+baselines:
+  spectral_score: true
+  cca: true
+
+decision:
+  type: exponential_evidence
+  alpha: 0.35
+  posterior_threshold: 0.85
+  consecutive_windows: 2
+  refractory_seconds: 0.5
+  emit_none: true
+
+output:
+  console: true
+  udp:
+    enabled: false
+    host: 127.0.0.1
+    port: 5005
+
+evaluation:
+  metrics:
+    - balanced_accuracy
+    - confusion_matrix
+    - precision_recall
+    - log_loss
+    - brier_score
+    - false_commands_per_minute
+  save_predictions: true
+  save_latent: true

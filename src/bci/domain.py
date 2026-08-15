@@ -1,0 +1,110 @@
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from enum import Enum
+from typing import Any
+
+import numpy as np
+
+
+class CalibrationPhase(str, Enum):
+    BOOTSTRAP = "BOOTSTRAP"
+    CALIBRATING = "CALIBRATING"
+    VALIDATING = "VALIDATING"
+    FROZEN_TEST = "FROZEN_TEST"
+    INFERENCE = "INFERENCE"
+
+
+@dataclass(frozen=True)
+class RecordingRef:
+    dataset: str
+    subject: int
+    session: str
+    run: str
+
+
+@dataclass(frozen=True)
+class EEGMetadata:
+    sfreq: float
+    ch_names: list[str]
+    source_name: str
+    source_id: str | None = None
+
+
+@dataclass(frozen=True)
+class EEGChunk:
+    data: np.ndarray
+    sfreq: float
+    ch_names: list[str]
+    t_start: float
+    annotations: list["BCIEvent"] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class BCIEvent:
+    timestamp: float
+    duration: float
+    native_label: str
+    command: str | None
+
+
+@dataclass(frozen=True)
+class TrialRecord:
+    trial_id: str
+    dataset: str
+    subject: int
+    session: str
+    run: str
+    event_index: int
+    native_label: str
+    command: str
+    start_time: float
+    end_time: float
+    sfreq: float
+    ch_names: list[str]
+    data: np.ndarray
+    split: str | None = None
+    feature_config_hash: str | None = None
+
+    @property
+    def provenance_key(self) -> tuple[str, int, str, str, int]:
+        return (self.dataset, self.subject, self.session, self.run, self.event_index)
+
+
+@dataclass(frozen=True)
+class FeatureRecord:
+    trial_id: str
+    label: str
+    split: str
+    values: np.ndarray
+    feature_names: list[str]
+    frequency_scores: dict[str, float]
+    provenance: dict[str, Any]
+    config_hash: str
+
+
+@dataclass(frozen=True)
+class Prediction:
+    trial_id: str
+    true_label: str | None
+    probabilities: dict[str, float]
+    predicted_label: str
+    confidence: float
+    model_version: int
+    timestamp: float
+
+
+@dataclass(frozen=True)
+class Decision:
+    timestamp: float
+    command: str
+    probabilities: dict[str, float]
+    confidence: float
+    model_version: int
+
+
+@dataclass
+class CalibrationState:
+    phase: CalibrationPhase = CalibrationPhase.BOOTSTRAP
+    model_version: int = 0
+    accumulated_trial_ids: list[str] = field(default_factory=list)

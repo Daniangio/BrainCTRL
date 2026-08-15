@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "brainctrl-bci"
+version = "0.1.0"
+description = "Adaptive SSVEP BCI prototype using MOABB replay and LSL boundaries"
+requires-python = ">=3.11"
+dependencies = []
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+markers = [
+  "dataset: tests that may download public MOABB data",
+  "lsl: tests requiring local LSL support",
+]
