@@ -16,7 +16,7 @@ def _symbol(command: str | None) -> str:
 
 class InterpretationPanel:
     def __init__(self):
-        from PySide6.QtWidgets import QGridLayout, QLabel, QWidget
+        from PySide6.QtWidgets import QGridLayout, QLabel, QSizePolicy, QWidget
 
         self.widget = QWidget()
         layout = QGridLayout(self.widget)
@@ -25,6 +25,8 @@ class InterpretationPanel:
         self.controller = QLabel("Controller output\n.\nNONE")
         for idx, label in enumerate([self.truth, self.model, self.controller]):
             label.setMinimumHeight(84)
+            label.setWordWrap(True)
+            label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
             label.setStyleSheet("font-size: 24px; font-weight: 600;")
             layout.addWidget(label, 0, idx)
 

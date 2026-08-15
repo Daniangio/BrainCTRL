@@ -110,6 +110,7 @@ class RealtimeExperimentEngine:
         self._actions: queue.Queue[ProtocolCommand] = queue.Queue()
         self._last_live_preview_time: float | None = None
         self._live_preview_counter = 0
+        self._last_eeg_gui_publish_time: float | None = None
 
     def stop(self) -> None:
         self._stop = True
@@ -154,25 +155,34 @@ class RealtimeExperimentEngine:
                 if self.clock.paused and not self.clock.consume_step():
                     time.sleep(self.config.experiment.poll_interval_seconds)
                     continue
+                did_work = False
                 chunk = self._poll_eeg()
                 if chunk is not None:
+                    did_work = True
                     if self.streaming_preprocessor is not None:
                         chunk = self.streaming_preprocessor.process_chunk(chunk)
                     ring.append(chunk)
-                    self.clock.wait_for_chunk(chunk.data.shape[1] / chunk.sfreq)
+                    if not getattr(self.eeg_source, "externally_paced", False):
+                        self.clock.wait_for_chunk(chunk.data.shape[1] / chunk.sfreq)
                     idle_started = time.monotonic()
-                    self.bus.publish(EEGWindowReady(chunk))
+                    self._maybe_publish_eeg_window(ring)
                     if hasattr(self.event_source, "advance_to") and ring.latest_time is not None:
                         self.event_source.advance_to(ring.latest_time)  # type: ignore[attr-defined]
                     self._maybe_publish_live_preview(ring)
-                for event in self.event_source.poll():
+                events = self.event_source.poll()
+                if events:
+                    did_work = True
+                for event in events:
                     pending = trial_builder.add_event(event)
                     if pending is not None:
                         self.bus.publish(TrialStarted(event))
                         split_key = (event.event_index or 0) * 1000
                         split = self.split_by_event.get(split_key, self.split_by_event.get(event.event_index or 0))
                         self.bus.publish(GroundTruthChanged(event.command, event.native_label, event.event_index, split))
-                for trial in trial_builder.resolve(ring):
+                trials = trial_builder.resolve(ring)
+                if trials:
+                    did_work = True
+                for trial in trials:
                     self.bus.publish(TrialCompleted(trial))
                     feature = self.feature_extractor.transform(self.preprocessor.transform(trial))
                     self._all_features.append(feature)
@@ -184,7 +194,8 @@ class RealtimeExperimentEngine:
                     self._stop = True
                 if time.monotonic() - idle_started > self.config.experiment.max_idle_seconds:
                     self._stop = True
-                time.sleep(self.config.experiment.poll_interval_seconds)
+                if not did_work:
+                    time.sleep(self.config.experiment.poll_interval_seconds)
         finally:
             self.event_source.close()
             self.eeg_source.close()
@@ -231,6 +242,24 @@ class RealtimeExperimentEngine:
         if self.decoder.model_version:
             self._set_phase(CalibrationPhase.INFERENCE)
             self._predict_and_emit(feature, self._test_predictions)
+
+    def _maybe_publish_eeg_window(self, ring: TimestampedRingBuffer) -> None:
+        if ring.latest_time is None or ring.earliest_time is None:
+            return
+        latest = ring.latest_time
+        min_interval = 1.0 / max(self.config.gui.refresh_hz, 1.0)
+        if self._last_eeg_gui_publish_time is not None and latest - self._last_eeg_gui_publish_time < min_interval:
+            return
+        start = max(ring.earliest_time, latest - self.config.gui.eeg_history_seconds)
+        if start >= latest:
+            return
+        expected_samples = max(1, int(round((latest - start) * ring.sfreq)))
+        try:
+            window = ring.slice(start, latest, expected_samples=expected_samples)
+        except ValueError:
+            return
+        self._last_eeg_gui_publish_time = latest
+        self.bus.publish(EEGWindowReady(window))
 
     def _maybe_publish_live_preview(self, ring: TimestampedRingBuffer) -> None:
         if not self.config.experiment.live_preview or ring.latest_time is None:

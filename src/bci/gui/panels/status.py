@@ -6,7 +6,7 @@ from bci.domain import Decision, EEGMetadata
 
 class StatusPanel:
     def __init__(self, config: BCIConfig):
-        from PySide6.QtWidgets import QLabel, QWidget, QHBoxLayout
+        from PySide6.QtWidgets import QLabel, QSizePolicy, QWidget, QHBoxLayout
 
         self.widget = QWidget()
         layout = QHBoxLayout(self.widget)
@@ -14,6 +14,9 @@ class StatusPanel:
         self.phase = QLabel("phase: BOOTSTRAP")
         self.model = QLabel("model v0")
         self.decision = QLabel("last command: NONE")
+        for label in [self.label, self.phase, self.model, self.decision]:
+            label.setWordWrap(True)
+            label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         layout.addWidget(self.label)
         layout.addWidget(self.phase)
         layout.addWidget(self.model)

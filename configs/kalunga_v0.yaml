@@ -20,7 +20,7 @@ source:
     annotations: true
     annotations_encoding: one-hot
     repeat: 1
-    chunk_size_samples: 1
+    chunk_size_samples: 16
     speed: 0.0
     allow_pause: true
     allow_step: true
@@ -141,7 +141,7 @@ experiment:
 
 gui:
   enabled: true
-  refresh_hz: 15.0
+  refresh_hz: 20.0
   eeg_history_seconds: 1.0
   spectrum_max_hz: 50.0
   max_channels_displayed: 8

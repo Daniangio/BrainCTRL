@@ -8,6 +8,8 @@ from bci.sources.base import EEGSource
 
 
 class LSLEEGSource(EEGSource):
+    externally_paced = True
+
     def __init__(self, config: BCIConfig):
         self.config = config
         self._stream = None

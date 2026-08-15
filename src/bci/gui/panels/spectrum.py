@@ -8,12 +8,16 @@ class SpectrumPanel:
     def __init__(self, config: BCIConfig):
         import pyqtgraph as pg
         from pyqtgraph.Qt import QtCore
-        from PySide6.QtWidgets import QVBoxLayout, QWidget
+        from PySide6.QtWidgets import QSizePolicy, QVBoxLayout, QWidget
 
         self.config = config
         self.widget = QWidget()
+        self.widget.setMinimumWidth(0)
+        self.widget.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         layout = QVBoxLayout(self.widget)
         self.plot = pg.PlotWidget(title="SSVEP spectral evidence")
+        self.plot.setMinimumWidth(0)
+        self.plot.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self.plot.setLabel("bottom", "frequency [Hz]")
         self.plot.setLabel("left", "mean log power")
         layout.addWidget(self.plot)

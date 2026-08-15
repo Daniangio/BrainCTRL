@@ -5,13 +5,15 @@ from bci.domain import Decision, Prediction
 
 class ProbabilityPanel:
     def __init__(self):
-        from PySide6.QtWidgets import QGridLayout, QLabel, QProgressBar, QWidget
+        from PySide6.QtWidgets import QGridLayout, QLabel, QProgressBar, QSizePolicy, QWidget
 
         self.widget = QWidget()
         self.layout = QGridLayout(self.widget)
         self.bars: dict[str, QProgressBar] = {}
         self.labels: dict[str, QLabel] = {}
         self.decision = QLabel("decision: NONE")
+        self.decision.setWordWrap(True)
+        self.decision.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         self.layout.addWidget(self.decision, 99, 0, 1, 2)
 
     def _ensure(self, classes):

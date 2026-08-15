@@ -8,13 +8,16 @@ from bci.experiment.events import CalibrationStatus
 
 class CalibrationPanel:
     def __init__(self):
-        from PySide6.QtWidgets import QLabel, QVBoxLayout, QWidget
+        from PySide6.QtWidgets import QLabel, QSizePolicy, QVBoxLayout, QWidget
 
         self.widget = QWidget()
         layout = QVBoxLayout(self.widget)
         self.label = QLabel("trials: 0 | phase: BOOTSTRAP | model v0")
         self.current = QLabel("current: waiting for event")
         self.reason = QLabel("reason: collecting calibration examples")
+        for label in [self.label, self.current, self.reason]:
+            label.setWordWrap(True)
+            label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         layout.addWidget(self.label)
         layout.addWidget(self.current)
         layout.addWidget(self.reason)

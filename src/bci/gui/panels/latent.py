@@ -9,11 +9,15 @@ from bci.domain import DecoderDiagnostics
 class LatentPanel:
     def __init__(self):
         import pyqtgraph as pg
-        from PySide6.QtWidgets import QVBoxLayout, QWidget
+        from PySide6.QtWidgets import QSizePolicy, QVBoxLayout, QWidget
 
         self.widget = QWidget()
+        self.widget.setMinimumWidth(0)
+        self.widget.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         layout = QVBoxLayout(self.widget)
         self.plot = pg.PlotWidget(title="Latent diagnostics")
+        self.plot.setMinimumWidth(0)
+        self.plot.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         layout.addWidget(self.plot)
         self.text = pg.TextItem("waiting for model")
         self.plot.addItem(self.text)

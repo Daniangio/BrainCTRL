@@ -32,7 +32,7 @@ class ReplayConfig(BaseModel):
     annotations: bool = True
     annotations_encoding: str = "one-hot"
     repeat: int = 1
-    chunk_size_samples: int = 1
+    chunk_size_samples: int = 16
     speed: float = 0.0
     allow_pause: bool = True
     allow_step: bool = True
@@ -200,7 +200,7 @@ class ExperimentConfig(BaseModel):
 
 class GUIConfig(BaseModel):
     enabled: bool = False
-    refresh_hz: float = 15.0
+    refresh_hz: float = 20.0
     eeg_history_seconds: float = 1.0
     spectrum_max_hz: float = 50.0
     max_channels_displayed: int = 8

@@ -32,6 +32,8 @@ class StreamPublisher(ABC):
 
 
 class EEGSource(ABC):
+    externally_paced = False
+
     @abstractmethod
     def connect(self) -> EEGMetadata: ...
 

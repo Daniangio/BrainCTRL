@@ -11,12 +11,16 @@ from bci.domain import EEGChunk
 class SignalPanel:
     def __init__(self, config: BCIConfig):
         import pyqtgraph as pg
-        from PySide6.QtWidgets import QVBoxLayout, QWidget
+        from PySide6.QtWidgets import QSizePolicy, QVBoxLayout, QWidget
 
         self.config = config
         self.widget = QWidget()
+        self.widget.setMinimumWidth(0)
+        self.widget.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         layout = QVBoxLayout(self.widget)
         self.plot = pg.PlotWidget(title="EEG traces")
+        self.plot.setMinimumWidth(0)
+        self.plot.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self.plot.setLabel("bottom", "seconds")
         self.plot.setLabel("left", "amplitude + offset")
         layout.addWidget(self.plot)
@@ -36,6 +40,12 @@ class SignalPanel:
         else:
             self._data = np.concatenate([self._data, incoming], axis=1)
             self._times = np.concatenate([self._times, np.asarray(incoming_times, dtype=float)])
+        order = np.argsort(self._times)
+        self._times = self._times[order]
+        self._data = self._data[:, order]
+        unique = np.concatenate(([True], np.diff(self._times) > 1e-9))
+        self._times = self._times[unique]
+        self._data = self._data[:, unique]
         latest = float(self._times[-1])
         keep = self._times >= latest - self.config.gui.eeg_history_seconds
         self._data = self._data[:, keep]
