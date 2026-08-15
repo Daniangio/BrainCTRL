@@ -9,7 +9,7 @@ from scipy.linalg import eigh
 from scipy.special import logsumexp
 
 from bci.config import BCIConfig
-from bci.domain import FeatureRecord
+from bci.domain import DecoderDiagnostics, FeatureRecord
 from bci.models.base import Decoder
 
 
@@ -34,7 +34,10 @@ class BayesianLatentDecoder(Decoder):
             raise ValueError("cannot fit decoder with no records")
         X = np.vstack([r.values for r in records])
         y = np.asarray([r.label for r in records])
-        self._classes = sorted(set(y), key=lambda c: ("LEFT", "RIGHT", "NONE").index(c) if c in {"LEFT", "RIGHT", "NONE"} else c)
+        self._classes = sorted(
+            {str(label) for label in y},
+            key=lambda c: ("LEFT", "RIGHT", "NONE").index(c) if c in {"LEFT", "RIGHT", "NONE"} else c,
+        )
         self.x_mean_ = X.mean(axis=0)
         self.x_scale_ = X.std(axis=0)
         self.x_scale_[self.x_scale_ < 1e-9] = 1.0
@@ -99,6 +102,9 @@ class BayesianLatentDecoder(Decoder):
             raise RuntimeError("decoder is not fitted")
         return ((np.atleast_2d(X) - self.x_mean_) / self.x_scale_) @ self.W_
 
+    def transform_latent(self, X: np.ndarray) -> np.ndarray:
+        return self._transform(X)
+
     def predict_proba(self, X: np.ndarray) -> np.ndarray:
         if self.cov_ is None:
             raise RuntimeError("decoder is not fitted")
@@ -119,6 +125,31 @@ class BayesianLatentDecoder(Decoder):
     def predict(self, features: FeatureRecord) -> dict[str, float]:
         probs = self.predict_proba(features.values)[0]
         return dict(zip(self._classes, map(float, probs)))
+
+    def diagnostics(self, records: Sequence[FeatureRecord] | None = None) -> DecoderDiagnostics:
+        latent_points = None
+        latent_labels = None
+        if records:
+            latent_points = self.transform_latent(np.vstack([r.values for r in records]))
+            latent_labels = [r.label for r in records]
+        covariances = {c: np.asarray(self.cov_).copy() for c in self._classes} if self.cov_ is not None else {}
+        separation: dict[str, float] = {}
+        if self.cov_ is not None and len(self._classes) >= 2:
+            inv_cov = np.linalg.inv(self.cov_)
+            for i, a in enumerate(self._classes):
+                for b in self._classes[i + 1 :]:
+                    diff = self.latent_means_[a] - self.latent_means_[b]
+                    separation[f"{a}_vs_{b}"] = float(np.sqrt(max(diff.T @ inv_cov @ diff, 0.0)))
+        return DecoderDiagnostics(
+            model_version=self.model_version,
+            classes=list(self._classes),
+            latent_dim=0 if self.W_ is None else int(self.W_.shape[1]),
+            latent_points=latent_points,
+            latent_labels=latent_labels,
+            class_centers={k: v.copy() for k, v in self.latent_means_.items()},
+            class_covariances=covariances,
+            separation=separation,
+        )
 
     def save(self, path: Path) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)

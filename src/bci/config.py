@@ -32,7 +32,7 @@ class ReplayConfig(BaseModel):
     annotations: bool = True
     annotations_encoding: str = "one-hot"
     repeat: int = 1
-    chunk_size_samples: int = 16
+    chunk_size_samples: int = 1
 
 
 class LSLConfig(BaseModel):
@@ -150,6 +150,24 @@ class EvaluationConfig(BaseModel):
     save_latent: bool = True
 
 
+class ExperimentConfig(BaseModel):
+    mode: Literal["labeled_replay", "offline_fast", "bootstrap_only", "live_lsl", "synthetic"] = "labeled_replay"
+    gui: bool = False
+    max_trials: int | None = None
+    poll_interval_seconds: float = 0.01
+    max_idle_seconds: float = 15.0
+
+
+class GUIConfig(BaseModel):
+    enabled: bool = False
+    refresh_hz: float = 15.0
+    eeg_history_seconds: float = 5.0
+    spectrum_max_hz: float = 50.0
+    max_channels_displayed: int = 8
+    show_latent: bool = True
+    show_raw_eeg: bool = True
+
+
 class BCIConfig(BaseModel):
     project: ProjectConfig
     dataset: DatasetConfig
@@ -166,6 +184,8 @@ class BCIConfig(BaseModel):
     decision: DecisionConfig = Field(default_factory=DecisionConfig)
     output: OutputConfig = Field(default_factory=OutputConfig)
     evaluation: EvaluationConfig = Field(default_factory=EvaluationConfig)
+    experiment: ExperimentConfig = Field(default_factory=ExperimentConfig)
+    gui: GUIConfig = Field(default_factory=GUIConfig)
 
     @property
     def stimulus_frequencies(self) -> dict[str, float]:

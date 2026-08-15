@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import numpy as np
-from sklearn.metrics import balanced_accuracy_score, confusion_matrix, log_loss, precision_recall_fscore_support
+from sklearn.metrics import balanced_accuracy_score, confusion_matrix, precision_recall_fscore_support
 
 from bci.domain import Prediction
 
@@ -26,7 +26,13 @@ def summarize_predictions(predictions: list[Prediction], classes: list[str], res
         "precision": dict(zip(classes, map(float, precision))),
         "recall": dict(zip(classes, map(float, recall))),
         "support": dict(zip(classes, map(int, support))),
-        "log_loss": float(log_loss(y_true, proba, labels=classes)),
+        "log_loss": _ordered_log_loss(y_true, proba, classes),
         "brier_score": brier,
         "false_commands_per_minute_rest": float(false_rest / rest_minutes),
     }
+
+
+def _ordered_log_loss(y_true: list[str], proba: np.ndarray, classes: list[str]) -> float:
+    idx = np.asarray([classes.index(y) for y in y_true])
+    clipped = np.clip(proba[np.arange(len(y_true)), idx], 1e-15, 1.0)
+    return max(0.0, float(-np.mean(np.log(clipped))))

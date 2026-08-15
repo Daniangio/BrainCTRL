@@ -37,6 +37,7 @@ class EEGChunk:
     sfreq: float
     ch_names: list[str]
     t_start: float
+    times: np.ndarray | None = None
     annotations: list["BCIEvent"] = field(default_factory=list)
 
 
@@ -46,6 +47,11 @@ class BCIEvent:
     duration: float
     native_label: str
     command: str | None
+    event_index: int | None = None
+    dataset: str | None = None
+    subject: int | None = None
+    session: str | None = None
+    run: str | None = None
 
 
 @dataclass(frozen=True)
@@ -108,3 +114,15 @@ class CalibrationState:
     phase: CalibrationPhase = CalibrationPhase.BOOTSTRAP
     model_version: int = 0
     accumulated_trial_ids: list[str] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class DecoderDiagnostics:
+    model_version: int
+    classes: list[str]
+    latent_dim: int
+    latent_points: np.ndarray | None
+    latent_labels: list[str] | None
+    class_centers: dict[str, np.ndarray]
+    class_covariances: dict[str, np.ndarray]
+    separation: dict[str, float]

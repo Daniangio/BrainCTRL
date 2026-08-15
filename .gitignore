@@ -206,6 +206,11 @@ tempCodeRunnerFile.py
 # Ruff stuff:
 .ruff_cache/
 
+# BrainCTRL local runtime data
+data/
+artifacts/
+logs/
+
 # PyPI configuration file
 .pypirc
 

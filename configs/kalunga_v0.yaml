@@ -20,7 +20,7 @@ source:
     annotations: true
     annotations_encoding: one-hot
     repeat: 1
-    chunk_size_samples: 16
+    chunk_size_samples: 1
   lsl:
     buffer_seconds: 10.0
     acquisition_delay_seconds: 0.01
@@ -107,3 +107,19 @@ evaluation:
     - false_commands_per_minute
   save_predictions: true
   save_latent: true
+
+experiment:
+  mode: labeled_replay
+  gui: true
+  max_trials: null
+  poll_interval_seconds: 0.01
+  max_idle_seconds: 15.0
+
+gui:
+  enabled: true
+  refresh_hz: 15.0
+  eeg_history_seconds: 5.0
+  spectrum_max_hz: 50.0
+  max_channels_displayed: 8
+  show_latent: true
+  show_raw_eeg: true

@@ -6,7 +6,7 @@ from typing import Sequence
 
 import numpy as np
 
-from bci.domain import FeatureRecord
+from bci.domain import DecoderDiagnostics, FeatureRecord
 
 
 class Decoder(ABC):
@@ -34,3 +34,9 @@ class Decoder(ABC):
     @property
     @abstractmethod
     def classes_(self) -> Sequence[str]: ...
+
+    def transform_latent(self, X: np.ndarray) -> np.ndarray:
+        raise NotImplementedError(f"{type(self).__name__} does not expose a latent transform")
+
+    def diagnostics(self, records: Sequence[FeatureRecord] | None = None) -> DecoderDiagnostics:
+        raise NotImplementedError(f"{type(self).__name__} does not expose diagnostics")

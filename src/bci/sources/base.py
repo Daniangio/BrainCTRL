@@ -43,3 +43,14 @@ class EEGSource(ABC):
 
     @abstractmethod
     def close(self) -> None: ...
+
+
+class EventSource(ABC):
+    @abstractmethod
+    def connect(self) -> None: ...
+
+    @abstractmethod
+    def poll(self) -> list[BCIEvent]: ...
+
+    @abstractmethod
+    def close(self) -> None: ...
