@@ -69,6 +69,7 @@ class TrialRecord:
     sfreq: float
     ch_names: list[str]
     data: np.ndarray
+    source_event_id: int | None = None
     split: str | None = None
     feature_config_hash: str | None = None
 
@@ -89,6 +90,7 @@ class FeatureRecord:
     config_hash: str
     spectral_freqs: np.ndarray | None = None
     log_power: np.ndarray | None = None
+    omitted_harmonics: list[dict[str, Any]] = field(default_factory=list)
 
 
 @dataclass(frozen=True)

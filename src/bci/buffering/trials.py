@@ -60,6 +60,7 @@ def trials_from_raw(config: BCIConfig, ref: RecordingRef, raw) -> list[TrialReco
                 sfreq=sfreq,
                 ch_names=ch_names,
                 data=data,
+                source_event_id=idx,
             )
         )
     return trials

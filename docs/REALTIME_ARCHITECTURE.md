@@ -26,6 +26,7 @@ The GUI runs the engine in a worker thread. The event bus forwards events throug
 Artifacts written per experiment include:
 
 - `config_resolved.yaml`
+- `protocol_manifest.csv`
 - `features.csv`
 - `calibration_history.csv`
 - `model_vNNN.pkl`
@@ -33,3 +34,5 @@ Artifacts written per experiment include:
 - `predictions_test.csv`
 - `decisions.csv`
 - `metrics.json`
+
+Realtime preprocessing is stateful: causal IIR filters process continuous chunks before the ring buffer. Trial-level preprocessing then avoids restarting filters on each window.

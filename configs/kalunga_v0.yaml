@@ -55,7 +55,6 @@ features:
   neighbor_inner_gap_hz: 1.0
   neighbor_outer_width_hz: 3.0
   log_epsilon: 1.0e-12
-  standardize: true
 
 split:
   type: chronological_trial
@@ -71,12 +70,32 @@ calibration:
   refit_on_all_accumulated_data: true
 
 model:
-  type: bayesian_latent
+  type: gaussian_latent
   latent_dim: 2
   projection: shrinkage_lda
   covariance: shrinkage
   class_prior: empirical
   regularization: 1.0e-3
+  standardize_features: true
+
+protocol:
+  mode: scientific
+  classes: [LEFT, RIGHT, NONE]
+  ordering: balanced_random
+  initial_calibration_per_class: 2
+  reserve_calibration_per_class: 3
+  challenge_per_class: 1
+  final_test_per_class: 1
+  append_calibration_per_class: 1
+  fit_every_new_events: 6
+  minimum_events_per_class_before_fit: 2
+  challenge:
+    metric: balanced_accuracy
+    pass_threshold: 0.80
+    minimum_events: 6
+    max_false_commands_per_minute: 2.0
+  final_test:
+    locked: true
 
 baselines:
   spectral_score: true

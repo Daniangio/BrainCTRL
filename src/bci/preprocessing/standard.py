@@ -11,13 +11,16 @@ from bci.preprocessing.base import Preprocessor
 
 
 class StandardPreprocessor(Preprocessor):
-    def __init__(self, config: BCIConfig):
+    def __init__(self, config: BCIConfig, apply_filters: bool = True):
         self.config = config
+        self.apply_filters = apply_filters
 
     def transform(self, trial: TrialRecord) -> TrialRecord:
         data = np.asarray(trial.data, dtype=float).copy()
         if self.config.preprocessing.detrend != "none":
             data = signal.detrend(data, axis=1, type=self.config.preprocessing.detrend)
+        if not self.apply_filters:
+            return replace(trial, data=data)
         bp = self.config.preprocessing.bandpass_hz
         if bp is not None:
             low, high = bp

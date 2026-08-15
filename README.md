@@ -45,7 +45,7 @@ MOABB Raw -> PlayerLSL -> LSL EEG + annotations
 timestamped buffer -> trial builder -> preprocessing -> spectral features
                               |
                               v
-calibration -> Bayesian latent decoder -> probabilities -> evidence policy
+calibration -> Gaussian latent decoder -> probabilities -> evidence policy
                               |
                               v
 GUI / console / UDP artifacts

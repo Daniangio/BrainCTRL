@@ -25,6 +25,7 @@ def test_synthetic_realtime_engine_headless(tmp_path):
     assert result.n_trials > 0
     assert (tmp_path / "features.csv").exists()
     assert (tmp_path / "metrics.json").exists()
+    assert (tmp_path / "protocol_manifest.csv").exists()
 
 
 def test_classifier_smoke_is_interpretable_and_trains_headlessly(tmp_path):
@@ -44,7 +45,7 @@ def test_classifier_smoke_is_interpretable_and_trains_headlessly(tmp_path):
     result = build_realtime_experiment(config, bus=bus, artifact_dir=tmp_path).run()
     assert result.model_version >= 1
     assert result.metrics["smoke"]["mode"] == "classifier_smoke"
-    assert "event -> window" in result.metrics["smoke"]["purpose"]
+    assert "Gaussian latent" in result.metrics["smoke"]["purpose"]
     assert updates
     assert any("waiting for" in status.reason for status in statuses)
     assert any("TRAINED" in status.reason for status in statuses)
@@ -68,6 +69,7 @@ def test_controller_smoke_exercises_evidence_accumulator(tmp_path):
     assert result.model_version >= 1
     assert result.metrics["smoke"]["mode"] == "controller_smoke"
     assert result.metrics["smoke"]["decision_policy"]["consecutive_windows"] == 2
+    assert result.metrics["smoke"]["n_calibration_features"] == 60
     assert "LEFT" in emitted
     assert "RIGHT" in emitted
     assert any(event.decision.reason.startswith("waiting_consecutive") for event in decisions)

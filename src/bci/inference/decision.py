@@ -10,6 +10,9 @@ class DecisionPolicy(ABC):
     @abstractmethod
     def update(self, prediction: Prediction) -> Decision: ...
 
+    def reset(self) -> None:
+        pass
+
 
 class ExponentialEvidencePolicy(DecisionPolicy):
     def __init__(self, config: BCIConfig):
@@ -17,6 +20,12 @@ class ExponentialEvidencePolicy(DecisionPolicy):
         self.q: dict[str, float] | None = None
         self.consecutive = 0
         self.last_candidate: str | None = None
+        self.last_command_time = -1e12
+
+    def reset(self) -> None:
+        self.q = None
+        self.consecutive = 0
+        self.last_candidate = None
         self.last_command_time = -1e12
 
     def update(self, prediction: Prediction) -> Decision:

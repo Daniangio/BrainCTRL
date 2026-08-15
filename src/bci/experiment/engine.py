@@ -57,6 +57,8 @@ class RealtimeExperimentEngine:
         sinks: list[CommandSink],
         event_bus: EventBus,
         split_by_event: dict[int, str],
+        streaming_preprocessor=None,
+        protocol_entries=None,
         artifact_dir: Path | None = None,
     ):
         self.config = config
@@ -69,6 +71,8 @@ class RealtimeExperimentEngine:
         self.sinks = sinks
         self.bus = event_bus
         self.split_by_event = split_by_event
+        self.streaming_preprocessor = streaming_preprocessor
+        self.protocol_entries = protocol_entries or []
         self.artifact_dir = artifact_dir or config.project.artifact_dir / utc_run_id("experiment")
         self._stop = False
         self._phase = CalibrationPhase.BOOTSTRAP
@@ -78,6 +82,8 @@ class RealtimeExperimentEngine:
         self._all_features: list[FeatureRecord] = []
         self._history: list[dict[str, Any]] = []
         self._decisions: list[Decision] = []
+        self._new_source_events_since_fit: set[int] = set()
+        self._fitted_source_events: set[int] = set()
 
     def stop(self) -> None:
         self._stop = True
@@ -85,7 +91,13 @@ class RealtimeExperimentEngine:
     def run(self) -> ExperimentResult:
         self.artifact_dir.mkdir(parents=True, exist_ok=True)
         write_resolved_config(self.config, self.artifact_dir / "config_resolved.yaml")
+        if self.protocol_entries:
+            from bci.protocol.allocation import write_protocol_manifest
+
+            write_protocol_manifest(self.protocol_entries, self.artifact_dir / "protocol_manifest.csv")
         metadata = self.eeg_source.connect()
+        if self.streaming_preprocessor is not None:
+            self.streaming_preprocessor.reset(metadata)
         self.event_source.connect()
         self.bus.publish(StreamConnected(metadata))
         ring = TimestampedRingBuffer(self.config.source.lsl.buffer_seconds, metadata.sfreq, metadata.ch_names)
@@ -96,6 +108,8 @@ class RealtimeExperimentEngine:
             while not self._stop:
                 chunk = self._poll_eeg()
                 if chunk is not None:
+                    if self.streaming_preprocessor is not None:
+                        chunk = self.streaming_preprocessor.process_chunk(chunk)
                     ring.append(chunk)
                     idle_started = time.monotonic()
                     self.bus.publish(EEGWindowReady(chunk))
@@ -140,9 +154,12 @@ class RealtimeExperimentEngine:
         if feature.split == "calibration":
             self._set_phase(CalibrationPhase.CALIBRATING)
             self._calibration.append(feature)
-            batch_size = self.config.calibration.batch_size_trials
-            if len(self._calibration) % batch_size == 0:
-                self.bus.publish(CalibrationBatchReady(batch_size, len(self._calibration)))
+            source_event_id = int(feature.provenance.get("source_event_id", feature.provenance["event_index"]))
+            if source_event_id not in self._fitted_source_events:
+                self._new_source_events_since_fit.add(source_event_id)
+            fit_every = self.config.protocol.fit_every_new_events or self.config.calibration.batch_size_trials
+            if len(self._new_source_events_since_fit) >= fit_every:
+                self.bus.publish(CalibrationBatchReady(len(self._new_source_events_since_fit), self._n_unique_calibration_events()))
                 self._maybe_update_model()
             self.bus.publish(self._calibration_status())
             return
@@ -154,58 +171,98 @@ class RealtimeExperimentEngine:
             self._set_phase(CalibrationPhase.FROZEN_TEST)
             self._predict_and_emit(feature, self._test_predictions)
             return
+        if feature.split == "reserve":
+            return
         if self.decoder.model_version:
             self._set_phase(CalibrationPhase.INFERENCE)
             self._predict_and_emit(feature, self._test_predictions)
 
     def _maybe_update_model(self) -> bool:
-        labels = sorted({r.label for r in self._calibration})
-        if len(labels) < 2:
+        expected = list(self.config.protocol.classes)
+        counts = self._calibration_event_counts()
+        if any(counts.get(label, 0) < self.config.protocol.minimum_events_per_class_before_fit for label in expected):
             return False
-        minimum = self.config.calibration.minimum_trials_per_class_before_fit
-        if any(sum(r.label == label for r in self._calibration) < minimum for label in labels):
+        if self._n_unique_calibration_events() < self.config.calibration.batch_size_trials:
             return False
+        if len(self._new_source_events_since_fit) < (self.config.protocol.fit_every_new_events or self.config.calibration.batch_size_trials):
+            return False
+        if not self.config.calibration.refit_on_all_accumulated_data:
+            raise NotImplementedError(
+                "refit_on_all_accumulated_data=false requires a decoder with true incremental updates; "
+                f"{type(self.decoder).__name__} currently supports cumulative refitting only"
+            )
         self.decoder.update(self._calibration)
-        diagnostics = self.decoder.diagnostics(self._calibration)
+        try:
+            diagnostics = self.decoder.diagnostics(self._calibration)
+        except NotImplementedError:
+            diagnostics = None
         metrics = {
             "n_calibration": len(self._calibration),
-            "separation": diagnostics.separation,
+            "n_original_events": self._n_unique_calibration_events(),
+            "separation": diagnostics.separation if diagnostics is not None else {},
         }
         self._history.append(
             {
                 "model_version": self.decoder.model_version,
                 "n_records": len(self._calibration),
                 "record_ids": ";".join(r.trial_id for r in self._calibration),
-                "separation": json.dumps(diagnostics.separation, sort_keys=True),
+                "n_original_events": self._n_unique_calibration_events(),
+                "separation": json.dumps(metrics["separation"], sort_keys=True),
             }
         )
         self.decoder.save(self.artifact_dir / f"model_v{self.decoder.model_version:03d}.pkl")
+        self._fitted_source_events = {
+            int(r.provenance.get("source_event_id", r.provenance["event_index"])) for r in self._calibration
+        }
+        self._new_source_events_since_fit.clear()
+        self.decision_policy.reset()
         self.bus.publish(ModelUpdated(self.decoder.model_version, metrics, diagnostics))
         return True
 
     def _calibration_status(self) -> CalibrationStatus:
-        required = self.config.calibration.minimum_trials_per_class_before_fit
-        counts = {label: sum(r.label == label for r in self._calibration) for label in ["LEFT", "RIGHT", "NONE"]}
+        required = self.config.protocol.minimum_events_per_class_before_fit
+        counts = {label: self._calibration_event_counts().get(label, 0) for label in self.config.protocol.classes}
         missing = {label: max(0, required - count) for label, count in counts.items()}
-        ready = all(value == 0 for value in missing.values()) and len(self._calibration) >= self.config.calibration.batch_size_trials
-        if self.decoder.model_version > 0 and len(self._calibration) % self.config.calibration.batch_size_trials == 0:
-            reason = f"MODEL v{self.decoder.model_version} TRAINED on {len(self._calibration)} trials"
+        ready = (
+            all(value == 0 for value in missing.values())
+            and self._n_unique_calibration_events() >= self.config.calibration.batch_size_trials
+            and len(self._new_source_events_since_fit) >= self.config.protocol.fit_every_new_events
+        )
+        if self.decoder.model_version > 0 and not self._new_source_events_since_fit:
+            reason = f"MODEL v{self.decoder.model_version} TRAINED on {self._n_unique_calibration_events()} original events"
         elif any(missing.values()):
             needed = ", ".join(f"{label} +{value}" for label, value in missing.items() if value)
             reason = f"collecting calibration examples: waiting for {needed}"
-        elif len(self._calibration) < self.config.calibration.batch_size_trials:
-            reason = f"waiting for batch {len(self._calibration)}/{self.config.calibration.batch_size_trials}"
+        elif self._n_unique_calibration_events() < self.config.calibration.batch_size_trials:
+            reason = f"waiting for initial batch {self._n_unique_calibration_events()}/{self.config.calibration.batch_size_trials} original events"
+        elif len(self._new_source_events_since_fit) < self.config.protocol.fit_every_new_events:
+            reason = f"waiting for new events {len(self._new_source_events_since_fit)}/{self.config.protocol.fit_every_new_events}"
         else:
             reason = "ready for next calibration update"
         return CalibrationStatus(
             counts=counts,
             required_per_class=required,
             batch_size=self.config.calibration.batch_size_trials,
-            n_total=len(self._calibration),
+            n_total=self._n_unique_calibration_events(),
             model_version=self.decoder.model_version,
             ready_to_fit=ready,
             reason=reason,
         )
+
+    def _calibration_event_counts(self) -> dict[str, int]:
+        seen: set[tuple[str, int]] = set()
+        counts: dict[str, int] = {}
+        for record in self._calibration:
+            source_event_id = int(record.provenance.get("source_event_id", record.provenance["event_index"]))
+            key = (record.label, source_event_id)
+            if key in seen:
+                continue
+            seen.add(key)
+            counts[record.label] = counts.get(record.label, 0) + 1
+        return counts
+
+    def _n_unique_calibration_events(self) -> int:
+        return len({int(r.provenance.get("source_event_id", r.provenance["event_index"])) for r in self._calibration})
 
     def _predict_and_emit(self, feature: FeatureRecord, sink: list[Prediction]) -> None:
         if self.decoder.model_version == 0:
@@ -270,7 +327,7 @@ class RealtimeExperimentEngine:
             purpose = "tests posterior smoothing, consecutive-window decisions, and command latency mechanics"
             expected = "LEFT and RIGHT commands should be emitted after repeated windows once the model is trained"
         else:
-            purpose = "tests event -> window -> FFT/features -> Bayesian decoder with one prediction per trial"
+            purpose = "tests event -> window -> FFT/features -> Gaussian latent decoder with one prediction per trial"
             expected = "near-perfect validation/test classification; decisions use alpha=1.0 and consecutive_windows=1"
         return {
             "mode": self.config.experiment.mode,
@@ -325,7 +382,7 @@ class RealtimeExperimentEngine:
 
     def _write_history(self) -> None:
         with (self.artifact_dir / "calibration_history.csv").open("w", newline="", encoding="utf-8") as f:
-            writer = csv.DictWriter(f, fieldnames=["model_version", "n_records", "record_ids", "separation"])
+            writer = csv.DictWriter(f, fieldnames=["model_version", "n_records", "n_original_events", "record_ids", "separation"])
             writer.writeheader()
             writer.writerows(self._history)
 

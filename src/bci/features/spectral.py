@@ -34,13 +34,19 @@ class SpectralFeatureExtractor(FeatureExtractor):
 
         values: list[float] = []
         names: list[str] = []
+        omitted: list[dict[str, object]] = []
         scores = {command: 0.0 for command in self.command_frequencies}
         counts = {command: 0 for command in self.command_frequencies}
+        upper_band = self._effective_upper_band(trial.sfreq)
         for ch_idx, ch_name in enumerate(trial.ch_names):
             for command, base_freq in self.command_frequencies.items():
                 for harmonic in self.config.features.harmonics:
                     target = base_freq * harmonic
                     if target >= trial.sfreq / 2.0:
+                        omitted.append({"command": command, "frequency": target, "harmonic": harmonic, "reason": "above_nyquist"})
+                        continue
+                    if upper_band is not None and target > upper_band:
+                        omitted.append({"command": command, "frequency": target, "harmonic": harmonic, "reason": "above_preprocessing_band"})
                         continue
                     value = self._local_log_snr(freqs, log_power[ch_idx], target)
                     names.append(f"{ch_name}:{base_freq:g}Hz:h{harmonic}:local_log_snr")
@@ -63,6 +69,7 @@ class SpectralFeatureExtractor(FeatureExtractor):
                 "session": trial.session,
                 "run": trial.run,
                 "event_index": trial.event_index,
+                "source_event_id": trial.source_event_id if trial.source_event_id is not None else trial.event_index,
                 "native_label": trial.native_label,
                 "start_time": trial.start_time,
                 "end_time": trial.end_time,
@@ -70,7 +77,13 @@ class SpectralFeatureExtractor(FeatureExtractor):
             config_hash=self.config_hash,
             spectral_freqs=freqs.copy(),
             log_power=log_power.mean(axis=0),
+            omitted_harmonics=omitted,
         )
+
+    def _effective_upper_band(self, sfreq: float) -> float | None:
+        if self.config.preprocessing.bandpass_hz is None:
+            return None
+        return min(float(self.config.preprocessing.bandpass_hz[1]), sfreq / 2.0)
 
     def _local_log_snr(self, freqs: np.ndarray, log_power: np.ndarray, target: float) -> float:
         half = self.config.features.local_band_half_width_hz

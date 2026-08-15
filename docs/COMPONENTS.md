@@ -26,11 +26,11 @@ Loads MOABB datasets, validates configured subjects, and exposes MNE Raw recordi
 
 ## Preprocessor and Features
 
-`StandardPreprocessor` performs configured detrending/filtering. `SpectralFeatureExtractor` computes relative log-power evidence near stimulus frequencies and valid harmonics.
+`StreamingPreprocessor` performs stateful causal filtering on continuous chunks before buffering. `StandardPreprocessor` still supports offline/trial transforms. `SpectralFeatureExtractor` computes relative log-power evidence near stimulus frequencies and valid harmonics, omitting harmonics above Nyquist or the effective preprocessing band.
 
 ## Decoder
 
-`BayesianLatentDecoder` learns an LDA-like latent projection and Gaussian class conditionals. Public diagnostics expose latent centers, points, and separation.
+`GaussianLatentDecoder` learns an LDA-like latent projection and Gaussian class conditionals. The legacy `bayesian_latent` model name remains as an alias. Public diagnostics expose latent centers, points, and separation.
 
 ## Decision Policy
 

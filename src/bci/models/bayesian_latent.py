@@ -38,8 +38,8 @@ class BayesianLatentDecoder(Decoder):
             {str(label) for label in y},
             key=lambda c: ("LEFT", "RIGHT", "NONE").index(c) if c in {"LEFT", "RIGHT", "NONE"} else c,
         )
-        self.x_mean_ = X.mean(axis=0)
-        self.x_scale_ = X.std(axis=0)
+        self.x_mean_ = X.mean(axis=0) if self.config.model.standardize_features else np.zeros(X.shape[1])
+        self.x_scale_ = X.std(axis=0) if self.config.model.standardize_features else np.ones(X.shape[1])
         self.x_scale_[self.x_scale_ < 1e-9] = 1.0
         Xs = (X - self.x_mean_) / self.x_scale_
         self.W_ = self._fit_projection(Xs, y)

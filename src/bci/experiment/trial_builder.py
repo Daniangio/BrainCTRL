@@ -77,6 +77,7 @@ class RealtimeTrialBuilder:
                     sfreq=buffer.sfreq,
                     ch_names=list(buffer.ch_names),
                     data=chunk.data,
+                    source_event_id=original_idx,
                     split=pending.split,
                 )
             )

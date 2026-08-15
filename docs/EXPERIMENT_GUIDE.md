@@ -42,3 +42,12 @@ python -m bci.cli experiment --config configs/kalunga_v0.yaml --smoke-mode contr
 `controller_smoke` uses longer stimulus blocks and sliding windows every configured stride, so it checks posterior smoothing and consecutive-window command emission.
 
 Both modes write a `smoke` section in `metrics.json` explaining the purpose, expected behavior, emitted commands, and decision reasons.
+
+V1.2 also writes `protocol_manifest.csv` before processing. It labels original events as:
+
+- `initial_calibration`
+- `reserve_calibration`
+- `challenge`
+- `final_test`
+
+Reserve calibration events are not fitted by the default linear smoke run. They are preserved for the interactive append-calibration loop.

@@ -85,7 +85,6 @@ class FeatureConfig(BaseModel):
     neighbor_inner_gap_hz: float = 1.0
     neighbor_outer_width_hz: float = 3.0
     log_epsilon: float = 1.0e-12
-    standardize: bool = True
 
 
 class SplitConfig(BaseModel):
@@ -111,12 +110,39 @@ class CalibrationConfig(BaseModel):
 
 
 class ModelConfig(BaseModel):
-    type: str = "bayesian_latent"
+    type: str = "gaussian_latent"
     latent_dim: int = 2
     projection: str = "shrinkage_lda"
     covariance: str = "shrinkage"
     class_prior: str = "empirical"
     regularization: float = 1.0e-3
+    standardize_features: bool = True
+
+
+class ChallengeConfig(BaseModel):
+    metric: str = "balanced_accuracy"
+    pass_threshold: float = 0.80
+    minimum_events: int = 6
+    max_false_commands_per_minute: float = 2.0
+
+
+class FinalTestConfig(BaseModel):
+    locked: bool = True
+
+
+class ProtocolConfig(BaseModel):
+    mode: Literal["scientific", "exploratory"] = "scientific"
+    classes: list[Command] = Field(default_factory=lambda: ["LEFT", "RIGHT", "NONE"])
+    ordering: Literal["balanced_random", "grouped_by_class", "original_dataset_order"] = "balanced_random"
+    initial_calibration_per_class: int = 2
+    reserve_calibration_per_class: int = 3
+    challenge_per_class: int = 1
+    final_test_per_class: int = 1
+    append_calibration_per_class: int = 1
+    fit_every_new_events: int = 6
+    minimum_events_per_class_before_fit: int = 2
+    challenge: ChallengeConfig = Field(default_factory=ChallengeConfig)
+    final_test: FinalTestConfig = Field(default_factory=FinalTestConfig)
 
 
 class BaselineConfig(BaseModel):
@@ -189,6 +215,7 @@ class BCIConfig(BaseModel):
     split: SplitConfig = Field(default_factory=SplitConfig)
     calibration: CalibrationConfig = Field(default_factory=CalibrationConfig)
     model: ModelConfig = Field(default_factory=ModelConfig)
+    protocol: ProtocolConfig = Field(default_factory=ProtocolConfig)
     baselines: BaselineConfig = Field(default_factory=BaselineConfig)
     decision: DecisionConfig = Field(default_factory=DecisionConfig)
     output: OutputConfig = Field(default_factory=OutputConfig)

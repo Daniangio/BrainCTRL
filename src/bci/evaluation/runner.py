@@ -14,7 +14,8 @@ from bci.evaluation.metrics import summarize_predictions
 from bci.evaluation.plots import save_confusion_matrix
 from bci.features.spectral import SpectralFeatureExtractor
 from bci.inference.engine import prediction_from_feature
-from bci.models.bayesian_latent import BayesianLatentDecoder
+from bci.models.base import Decoder
+from bci.models.factory import get_decoder
 from bci.preprocessing.standard import StandardPreprocessor
 from bci.registry import get_dataset_adapter
 from bci.sources.lsl import LSLEEGSource
@@ -67,7 +68,7 @@ def run_evaluation(config: BCIConfig, run_prefix: str = "eval") -> dict:
     calibration = [r for r in features if r.split == "calibration"]
     validation = [r for r in features if r.split == "validation"]
     test = [r for r in features if r.split == "test"]
-    decoder = BayesianLatentDecoder(config)
+    decoder = get_decoder(config)
     trainer = CalibrationTrainer(config, decoder)
     trainer.fit_batches(calibration, artifact_dir)
     if decoder.model_version == 0:
@@ -121,7 +122,7 @@ def run_lsl_replay_then_evaluate(config: BCIConfig) -> dict:
     return metrics
 
 
-def predict_records(decoder: BayesianLatentDecoder, records: list[FeatureRecord]) -> list[Prediction]:
+def predict_records(decoder: Decoder, records: list[FeatureRecord]) -> list[Prediction]:
     return [prediction_from_feature(decoder, record) for record in records]
 
 

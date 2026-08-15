@@ -6,16 +6,20 @@ from typing import Sequence
 
 from bci.config import BCIConfig
 from bci.domain import FeatureRecord
-from bci.models.bayesian_latent import BayesianLatentDecoder
+from bci.models.base import Decoder
 
 
 @dataclass
 class CalibrationTrainer:
     config: BCIConfig
-    decoder: BayesianLatentDecoder
+    decoder: Decoder
     history: list[dict] = field(default_factory=list)
 
-    def fit_batches(self, records: Sequence[FeatureRecord], artifact_dir: Path | None = None) -> BayesianLatentDecoder:
+    def fit_batches(self, records: Sequence[FeatureRecord], artifact_dir: Path | None = None) -> Decoder:
+        if not self.config.calibration.refit_on_all_accumulated_data:
+            raise NotImplementedError(
+                "refit_on_all_accumulated_data=false requires a decoder with true incremental updates"
+            )
         accumulated: list[FeatureRecord] = []
         batch = max(1, self.config.calibration.batch_size_trials)
         for idx, record in enumerate(records, start=1):
