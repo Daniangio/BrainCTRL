@@ -23,23 +23,33 @@ class RealtimeTrialBuilder:
         self.pending: list[PendingTrial] = []
         self.completed_count = 0
 
-    def add_event(self, event: BCIEvent, allowed_splits: set[str] | None = None) -> PendingTrial | None:
+    def add_event(
+        self,
+        event: BCIEvent,
+        allowed_splits: set[str] | None = None,
+        split_override: str | None = None,
+        max_duration_seconds: float | None = None,
+    ) -> PendingTrial | None:
         if event.command is None:
             return None
         first_pending: PendingTrial | None = None
         event_index = event.event_index if event.event_index is not None else self.completed_count
-        starts = [event.timestamp + self.config.trials.onset_offset_seconds]
-        if event.duration > self.config.trials.window_seconds:
+        first_start = event.timestamp + self.config.trials.onset_offset_seconds
+        duration_after_offset = max(event.duration - self.config.trials.onset_offset_seconds, 0.0)
+        if max_duration_seconds is not None:
+            duration_after_offset = min(duration_after_offset or max_duration_seconds, max_duration_seconds)
+        starts = [first_start]
+        if duration_after_offset > self.config.trials.window_seconds:
             starts = []
-            start = event.timestamp + self.config.trials.onset_offset_seconds
-            latest_end = event.timestamp + event.duration
+            start = first_start
+            latest_end = first_start + duration_after_offset
             while start + self.config.trials.window_seconds <= latest_end + 1e-9:
                 starts.append(start)
                 start += self.config.trials.inference_stride_seconds
         for window_index, start in enumerate(starts):
             end = start + self.config.trials.window_seconds
             split_key = event_index * 1000 + window_index
-            split = self.split_by_event.get(split_key, self.split_by_event.get(event_index, "inference"))
+            split = split_override or self.split_by_event.get(split_key, self.split_by_event.get(event_index, "inference"))
             if allowed_splits is not None and split not in allowed_splits:
                 continue
             pending = PendingTrial(event=event, start=start, end=end, split=split, window_index=window_index)

@@ -21,7 +21,7 @@ from bci.sinks.console import ConsoleCommandSink
 from bci.sinks.udp import UDPCommandSink
 from bci.sources.events import LSLAnnotationSource, SyntheticEventSource
 from bci.sources.lsl import LSLEEGSource
-from bci.sources.replay import MOABBReplayPublisher
+from bci.sources.replay import MOABBReplayPublisher, RawReplayEEGSource, RawReplayEventSource
 from bci.sources.synthetic import ScriptedSyntheticEEGSource
 
 
@@ -58,9 +58,14 @@ def build_realtime_experiment(config: BCIConfig, bus: EventBus | None = None, ar
         offline_trials = trials_from_raw(config, ref, raw)
         protocol_entries = allocate_protocol(config, offline_trials)
         split_by_event = protocol_split_map(protocol_entries)
-        publisher = MOABBReplayPublisher(config, adapter, ref)
-        eeg_source = LSLEEGSource(config)
-        event_source = LSLAnnotationSource(config, ref)
+        if config.experiment.gui or config.experiment.manual_start:
+            publisher = None
+            eeg_source = RawReplayEEGSource(config, raw)
+            event_source = RawReplayEventSource(config, raw, ref)
+        else:
+            publisher = MOABBReplayPublisher(config, adapter, ref)
+            eeg_source = LSLEEGSource(config)
+            event_source = LSLAnnotationSource(config, ref)
     elif config.source.mode == "lsl_live":
         if config.experiment.mode != "live_lsl":
             raise ValueError("source.mode=lsl_live requires experiment.mode=live_lsl")
@@ -100,7 +105,7 @@ def build_synthetic_sources(config: BCIConfig):
     protocol_entries = allocate_protocol(config, base_trials)
     command_by_event = {trial.event_index: commands[trial.event_index] for trial in base_trials}
     duration = (
-        config.trials.window_seconds + config.trials.onset_offset_seconds
+        max(config.trials.window_seconds, config.calibration.seconds_per_class) + config.trials.onset_offset_seconds
         if mode == "classifier_smoke"
         else 4.0
     )

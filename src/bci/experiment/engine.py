@@ -112,6 +112,7 @@ class RealtimeExperimentEngine:
         self._last_live_preview_time: float | None = None
         self._live_preview_counter = 0
         self._last_eeg_gui_publish_time: float | None = None
+        self._manual_calibration_seconds = {label: 0.0 for label in config.protocol.classes}
 
     def stop(self) -> None:
         self._stop = True
@@ -177,8 +178,11 @@ class RealtimeExperimentEngine:
                 if events:
                     did_work = True
                 for event in events:
-                    allowed_splits = self._allowed_splits_for_current_phase()
-                    pending = trial_builder.add_event(event, allowed_splits=allowed_splits)
+                    if self.config.experiment.manual_start and self._phase == CalibrationPhase.CALIBRATION_STREAMING:
+                        pending = self._add_manual_calibration_event(trial_builder, event)
+                    else:
+                        allowed_splits = self._allowed_splits_for_current_phase()
+                        pending = trial_builder.add_event(event, allowed_splits=allowed_splits)
                     if pending is not None:
                         self.bus.publish(TrialStarted(event))
                         split = pending.split
@@ -223,6 +227,32 @@ class RealtimeExperimentEngine:
         if hasattr(self.eeg_source, "poll_new"):
             return self.eeg_source.poll_new()  # type: ignore[attr-defined]
         return self.eeg_source.read_latest(self.config.experiment.poll_interval_seconds)
+
+    def _add_manual_calibration_event(self, trial_builder: RealtimeTrialBuilder, event) -> object | None:
+        if event.command is None or event.command not in self.config.protocol.classes:
+            return None
+        remaining = self.config.calibration.seconds_per_class - self._manual_calibration_seconds.get(event.command, 0.0)
+        if remaining <= 1e-9:
+            return None
+        usable = self._usable_calibration_duration(event, remaining)
+        pending = trial_builder.add_event(
+            event,
+            allowed_splits={"calibration"},
+            split_override="calibration",
+            max_duration_seconds=usable,
+        )
+        if pending is not None:
+            self._manual_calibration_seconds[event.command] = self._manual_calibration_seconds.get(event.command, 0.0) + usable
+        return pending
+
+    def _usable_calibration_duration(self, event, remaining: float) -> float:
+        if event.duration > self.config.trials.onset_offset_seconds:
+            available = event.duration - self.config.trials.onset_offset_seconds
+        elif event.duration > 0:
+            available = event.duration
+        else:
+            available = self.config.trials.window_seconds
+        return max(0.0, min(remaining, available))
 
     def _route_feature(self, feature: FeatureRecord) -> None:
         if feature.split == "calibration":
@@ -374,6 +404,8 @@ class RealtimeExperimentEngine:
         counts = self._calibration_event_counts()
         if any(counts.get(label, 0) < self.config.protocol.minimum_events_per_class_before_fit for label in expected):
             return False
+        if self.config.experiment.manual_start and not self._manual_calibration_complete():
+            return False
         if self._n_unique_calibration_events() < self.config.calibration.batch_size_trials:
             return False
         if len(self._new_source_events_since_fit) < (self.config.protocol.fit_every_new_events or self.config.calibration.batch_size_trials):
@@ -428,6 +460,12 @@ class RealtimeExperimentEngine:
         )
         if self.decoder.model_version > 0 and not self._new_source_events_since_fit:
             reason = f"MODEL v{self.decoder.model_version} TRAINED on {self._n_unique_calibration_events()} original events"
+        elif self.config.experiment.manual_start and not self._manual_calibration_complete():
+            needed = ", ".join(
+                f"{label} {min(seconds, self.config.calibration.seconds_per_class):.1f}/{self.config.calibration.seconds_per_class:g}s"
+                for label, seconds in self._manual_calibration_seconds.items()
+            )
+            reason = f"collecting calibration seconds: {needed}"
         elif any(missing.values()):
             needed = ", ".join(f"{label} +{value}" for label, value in missing.items() if value)
             reason = f"collecting calibration examples: waiting for {needed}"
@@ -458,6 +496,10 @@ class RealtimeExperimentEngine:
             seen.add(key)
             counts[record.label] = counts.get(record.label, 0) + 1
         return counts
+
+    def _manual_calibration_complete(self) -> bool:
+        target = self.config.calibration.seconds_per_class
+        return all(self._manual_calibration_seconds.get(label, 0.0) >= target for label in self.config.protocol.classes)
 
     def _n_unique_calibration_events(self) -> int:
         return len({int(r.provenance.get("source_event_id", r.provenance["event_index"])) for r in self._calibration})
@@ -499,8 +541,20 @@ class RealtimeExperimentEngine:
         self.bus.publish(PhaseChanged(old, phase))
 
     def _is_complete(self) -> bool:
-        expected = len(self.split_by_event)
-        return expected > 0 and len(self._all_features) >= expected and not any(f.split == "inference" for f in self._all_features)
+        if self.config.experiment.manual_start:
+            return False
+        expected = set(self.split_by_event)
+        if not expected:
+            return False
+        seen: set[int] = set()
+        for feature in self._all_features:
+            event_index = int(feature.provenance["event_index"])
+            source_event_id = int(feature.provenance.get("source_event_id", event_index))
+            if event_index in expected:
+                seen.add(event_index)
+            elif source_event_id in expected:
+                seen.add(source_event_id)
+        return expected.issubset(seen) and not any(f.split == "inference" for f in self._all_features)
 
     def _finalize(self) -> dict[str, Any]:
         if self.decoder.model_version == 0 and self._calibration:
@@ -573,6 +627,7 @@ class RealtimeExperimentEngine:
         new_state = self._state_machine.transition(action)
         self._set_phase(new_state)
         if action == ProtocolAction.START_CALIBRATION:
+            self._manual_calibration_seconds = {label: 0.0 for label in self.config.protocol.classes}
             self.clock.resume()
             self.bus.publish(ReplayPaused(False))
         elif action == ProtocolAction.START_CHALLENGE:

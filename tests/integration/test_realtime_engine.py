@@ -96,6 +96,7 @@ def test_manual_start_blocks_until_start_calibration_action(tmp_path):
     config.experiment.manual_start = True
     config.output.console = False
     config.experiment.max_idle_seconds = 5.0
+    config.calibration.seconds_per_class = 2.0
     bus = EventBus()
     trials: list[TrialStarted] = []
     updates: list[ModelUpdated] = []
@@ -112,6 +113,7 @@ def test_manual_start_blocks_until_start_calibration_action(tmp_path):
     while not updates and time.time() < deadline:
         time.sleep(0.05)
     assert updates
+    assert trials
     managed.engine.request_action(ProtocolAction.START_CHALLENGE)
     thread.join(timeout=20.0)
     assert not thread.is_alive()
@@ -125,6 +127,7 @@ def test_manual_challenge_does_not_process_late_calibration_trials(tmp_path):
     config.experiment.manual_start = True
     config.output.console = False
     config.experiment.max_idle_seconds = 5.0
+    config.calibration.seconds_per_class = 2.0
     bus = EventBus()
     managed = build_realtime_experiment(config, bus=bus, artifact_dir=tmp_path)
     result_box = {}
@@ -195,6 +198,7 @@ def test_final_test_action_rejected_without_model(tmp_path):
     config.experiment.mode = "classifier_smoke"
     config.experiment.manual_start = True
     config.output.console = False
+    config.calibration.seconds_per_class = 2.0
     bus = EventBus()
     failures: list[FitFailed] = []
     bus.subscribe(FitFailed, failures.append)

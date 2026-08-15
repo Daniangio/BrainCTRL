@@ -20,7 +20,7 @@ from bci.experiment.events import (
 )
 from bci.gui.panels.calibration import CalibrationPanel
 from bci.gui.panels.controls import ControlsPanel
-from bci.gui.panels.interpretation import InterpretationPanel
+from bci.gui.panels.ground_truth import GroundTruthPanel
 from bci.gui.panels.latent import LatentPanel
 from bci.gui.panels.probabilities import ProbabilityPanel
 from bci.gui.panels.signal import SignalPanel
@@ -44,7 +44,7 @@ class MainWindow:
         self._window = _Window()
         self._window.setWindowTitle("BrainCTRL realtime experiment")
         self.status = StatusPanel(config)
-        self.interpretation = InterpretationPanel()
+        self.ground_truth = GroundTruthPanel()
         self.signal = SignalPanel(config)
         self.spectrum = SpectrumPanel(config)
         self.probabilities = ProbabilityPanel()
@@ -53,7 +53,7 @@ class MainWindow:
         self.controls = ControlsPanel(config, self._window.action_requested.emit)
         for panel in [
             self.status.widget,
-            self.interpretation.widget,
+            self.ground_truth.widget,
             self.signal.widget,
             self.probabilities.widget,
             self.latent.widget,
@@ -67,18 +67,20 @@ class MainWindow:
         layout.setContentsMargins(12, 12, 12, 12)
         layout.setHorizontalSpacing(12)
         layout.setVerticalSpacing(12)
-        layout.setColumnStretch(0, 2)
-        layout.setColumnStretch(1, 3)
+        layout.setColumnStretch(0, 3)
+        layout.setColumnStretch(1, 0)
+        layout.setColumnStretch(2, 3)
+        layout.setRowStretch(1, 4)
         layout.setRowStretch(2, 3)
         layout.setRowStretch(3, 3)
-        layout.addWidget(self.status.widget, 0, 0)
-        layout.addWidget(self.interpretation.widget, 1, 0)
-        layout.addWidget(self.signal.widget, 2, 0)
-        layout.addWidget(self.latent.widget, 3, 0)
-        layout.addWidget(self.probabilities.widget, 4, 0)
-        layout.addWidget(self.calibration.widget, 5, 0)
-        layout.addWidget(self.controls.widget, 6, 0)
-        layout.addWidget(self.spectrum.widget, 0, 1, 7, 1)
+        layout.addWidget(self.status.widget, 0, 0, 1, 2)
+        layout.addWidget(self.signal.widget, 1, 0)
+        layout.addWidget(self.ground_truth.widget, 1, 1)
+        layout.addWidget(self.latent.widget, 2, 0, 1, 2)
+        layout.addWidget(self.probabilities.widget, 3, 0, 1, 2)
+        layout.addWidget(self.calibration.widget, 4, 0, 1, 2)
+        layout.addWidget(self.controls.widget, 5, 0, 1, 2)
+        layout.addWidget(self.spectrum.widget, 0, 2, 6, 1)
         self._window.setCentralWidget(root)
         self._window.setStyleSheet(
             """
@@ -163,7 +165,7 @@ class MainWindow:
         elif isinstance(event, TrialStarted):
             self.calibration.start_trial(event.event)
         elif isinstance(event, GroundTruthChanged):
-            self.interpretation.update_ground_truth(event)
+            self.ground_truth.update_ground_truth(event)
         elif isinstance(event, CalibrationBatchReady):
             self.calibration.set_batch(event.n_batch, event.n_total)
         elif isinstance(event, TrialCompleted):
@@ -177,10 +179,8 @@ class MainWindow:
                 self.latent.update_live_point(event.latent_point, predicted_label)
             if event.prediction is not None:
                 self.probabilities.update_prediction(event.prediction)
-                self.interpretation.update_prediction(event.prediction)
             if event.decision is not None:
                 self.probabilities.update_decision(event.decision)
-                self.interpretation.update_decision(event.decision)
                 self.status.set_decision(event.decision)
         elif isinstance(event, ModelUpdated):
             self.status.set_model(event.model_version)
@@ -191,10 +191,8 @@ class MainWindow:
             self.calibration.set_status(event)
         elif isinstance(event, PredictionProduced):
             self.probabilities.update_prediction(event.prediction)
-            self.interpretation.update_prediction(event.prediction)
         elif isinstance(event, DecisionEmitted):
             self.probabilities.update_decision(event.decision)
-            self.interpretation.update_decision(event.decision)
             self.status.set_decision(event.decision)
         elif isinstance(event, InferenceUpdated):
             if event.latent_point is not None:

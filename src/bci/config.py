@@ -109,6 +109,7 @@ class SplitConfig(BaseModel):
 class CalibrationConfig(BaseModel):
     batch_size_trials: int = 3
     minimum_trials_per_class_before_fit: int = 1
+    seconds_per_class: float = 10.0
     refit_on_all_accumulated_data: bool = True
 
 

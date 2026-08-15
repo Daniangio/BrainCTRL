@@ -3,7 +3,10 @@ from __future__ import annotations
 from bci.config import load_config
 from bci.domain import Prediction
 from bci.inference.decision import ExponentialEvidencePolicy
+from bci.sources.replay import RawReplayEEGSource, RawReplayEventSource
 from bci.sources.synthetic import SyntheticEEGSource
+
+import numpy as np
 
 
 def test_abstention_below_threshold():
@@ -31,3 +34,43 @@ def test_source_substitution_contract():
         chunk = source.read_latest(1.0)
         assert chunk.data.shape[0] == len(meta.ch_names)
         source.close()
+
+
+class _FakeRaw:
+    def __init__(self):
+        self.info = {"sfreq": 10.0}
+        self.ch_names = ["Oz", "Stim"]
+        self.n_times = 30
+        self.annotations = [
+            {"onset": 0.1, "duration": 1.0, "description": "13"},
+            {"onset": 0.2, "duration": 1.0, "description": "17"},
+            {"onset": 0.3, "duration": 1.0, "description": "rest"},
+        ]
+        self._data = np.vstack([np.arange(self.n_times, dtype=float), np.zeros(self.n_times)])
+
+    def get_channel_types(self):
+        return ["eeg", "stim"]
+
+    def get_data(self, picks, start, stop):
+        indices = [self.ch_names.index(pick) for pick in picks]
+        return self._data[indices, start:stop]
+
+
+def test_raw_replay_sources_preserve_raw_annotation_indices():
+    config = load_config("configs/kalunga_v0.yaml")
+    raw = _FakeRaw()
+    eeg = RawReplayEEGSource(config, raw)
+    meta = eeg.connect()
+    chunk = eeg.poll_new()
+    assert meta.ch_names == ["Oz"]
+    assert chunk is not None
+    assert chunk.data.shape == (1, config.source.replay.chunk_size_samples)
+    events = RawReplayEventSource(config, raw)
+    events.connect()
+    events.advance_to(1.0)
+    decoded = events.poll()
+    assert [(event.native_label, event.command, event.event_index) for event in decoded] == [
+        ("13", "LEFT", 0),
+        ("17", None, 1),
+        ("rest", "NONE", 2),
+    ]
