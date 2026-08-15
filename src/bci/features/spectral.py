@@ -76,7 +76,9 @@ class SpectralFeatureExtractor(FeatureExtractor):
             },
             config_hash=self.config_hash,
             spectral_freqs=freqs.copy(),
-            log_power=log_power.mean(axis=0),
+            log_power=log_power.copy(),
+            spectral_power=power.copy(),
+            spectral_channel_names=list(trial.ch_names),
             omitted_harmonics=omitted,
         )
 

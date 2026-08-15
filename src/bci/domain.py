@@ -101,6 +101,8 @@ class FeatureRecord:
     config_hash: str
     spectral_freqs: np.ndarray | None = None
     log_power: np.ndarray | None = None
+    spectral_power: np.ndarray | None = None
+    spectral_channel_names: list[str] | None = None
     omitted_harmonics: list[dict[str, Any]] = field(default_factory=list)
 
 

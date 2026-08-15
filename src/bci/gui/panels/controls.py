@@ -8,7 +8,7 @@ from bci.protocol.state_machine import ProtocolAction
 
 class ControlsPanel:
     def __init__(self, config: BCIConfig, emit_action: Callable[[ProtocolAction, dict], None]):
-        from PySide6.QtWidgets import QDoubleSpinBox, QGridLayout, QLabel, QPushButton, QSpinBox, QWidget
+        from PySide6.QtWidgets import QApplication, QDoubleSpinBox, QGridLayout, QLabel, QPushButton, QSpinBox, QStyle, QWidget
 
         self._emit_action = emit_action
         self.widget = QWidget()
@@ -19,6 +19,19 @@ class ControlsPanel:
         self.pause = QPushButton("Pause")
         self.resume = QPushButton("Resume")
         self.step = QPushButton("Step")
+        style = QApplication.style()
+        self.start_calibration.setIcon(style.standardIcon(QStyle.StandardPixmap.SP_DialogApplyButton))
+        self.start_challenge.setIcon(style.standardIcon(QStyle.StandardPixmap.SP_ArrowForward))
+        self.final_test.setIcon(style.standardIcon(QStyle.StandardPixmap.SP_DialogYesButton))
+        self.pause.setIcon(style.standardIcon(QStyle.StandardPixmap.SP_MediaPause))
+        self.resume.setIcon(style.standardIcon(QStyle.StandardPixmap.SP_MediaPlay))
+        self.step.setIcon(style.standardIcon(QStyle.StandardPixmap.SP_MediaSeekForward))
+        self.start_calibration.setToolTip("Begin calibration acquisition.")
+        self.start_challenge.setToolTip("Start challenge trials after a model is trained.")
+        self.final_test.setToolTip("Run the locked final test after a model is trained.")
+        self.pause.setToolTip("Pause replay.")
+        self.resume.setToolTip("Resume replay.")
+        self.step.setToolTip("Advance one replay step while paused.")
         self.speed = QDoubleSpinBox()
         self.speed.setRange(0.0, 5.0)
         self.speed.setSingleStep(0.25)
@@ -64,6 +77,9 @@ class ControlsPanel:
         self.speed.valueChanged.connect(lambda value: emit_action(ProtocolAction.SET_SPEED, {"speed": float(value)}))
         for widget in [self.threshold, self.alpha, self.consecutive, self.refractory]:
             widget.valueChanged.connect(self._emit_decision_params)
+        self._phase = "BOOTSTRAP"
+        self._model_version = 0
+        self._refresh_enabled()
 
     def _emit_decision_params(self) -> None:
         self._emit_action(
@@ -74,4 +90,19 @@ class ControlsPanel:
                 "consecutive_windows": int(self.consecutive.value()),
                 "refractory_seconds": float(self.refractory.value()),
             },
+        )
+
+    def set_phase(self, phase: str) -> None:
+        self._phase = phase
+        self._refresh_enabled()
+
+    def set_model(self, model_version: int) -> None:
+        self._model_version = model_version
+        self._refresh_enabled()
+
+    def _refresh_enabled(self) -> None:
+        self.start_calibration.setEnabled(self._phase in {"READY", "BOOTSTRAP", "CALIBRATION_READY"})
+        self.start_challenge.setEnabled(self._model_version > 0 and self._phase in {"CALIBRATION_READY", "CHALLENGE_REVIEW"})
+        self.final_test.setEnabled(
+            self._model_version > 0 and self._phase in {"CALIBRATION_READY", "CHALLENGE_REVIEW", "FINAL_TEST_READY"}
         )

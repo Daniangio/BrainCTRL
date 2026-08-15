@@ -55,6 +55,14 @@ class LiveWindowUpdated:
 
 
 @dataclass(frozen=True)
+class InferenceUpdated:
+    feature: FeatureRecord
+    prediction: Prediction
+    decision: Decision
+    latent_point: list[float] | None = None
+
+
+@dataclass(frozen=True)
 class CalibrationBatchReady:
     n_batch: int
     n_total: int

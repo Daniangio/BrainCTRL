@@ -23,13 +23,13 @@ class RealtimeTrialBuilder:
         self.pending: list[PendingTrial] = []
         self.completed_count = 0
 
-    def add_event(self, event: BCIEvent) -> PendingTrial | None:
+    def add_event(self, event: BCIEvent, allowed_splits: set[str] | None = None) -> PendingTrial | None:
         if event.command is None:
             return None
         first_pending: PendingTrial | None = None
         event_index = event.event_index if event.event_index is not None else self.completed_count
         starts = [event.timestamp + self.config.trials.onset_offset_seconds]
-        if self.config.experiment.mode == "controller_smoke" and event.duration > self.config.trials.window_seconds:
+        if event.duration > self.config.trials.window_seconds:
             starts = []
             start = event.timestamp + self.config.trials.onset_offset_seconds
             latest_end = event.timestamp + event.duration
@@ -40,6 +40,8 @@ class RealtimeTrialBuilder:
             end = start + self.config.trials.window_seconds
             split_key = event_index * 1000 + window_index
             split = self.split_by_event.get(split_key, self.split_by_event.get(event_index, "inference"))
+            if allowed_splits is not None and split not in allowed_splits:
+                continue
             pending = PendingTrial(event=event, start=start, end=end, split=split, window_index=window_index)
             self.pending.append(pending)
             first_pending = first_pending or pending

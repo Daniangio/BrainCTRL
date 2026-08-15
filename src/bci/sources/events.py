@@ -100,7 +100,7 @@ def decode_one_hot_annotations(
             seen.add(key)
             value = float(column[channel_idx])
             duration = 0.0 if value < 0 else value
-            event_index = next(counter) if command is not None else None
+            event_index = next(counter)
             events.append(
                 BCIEvent(
                     timestamp=float(timestamp),

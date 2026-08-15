@@ -9,7 +9,16 @@ from bci.buffering.ring import TimestampedRingBuffer
 from bci.config import load_config
 from bci.domain import BCIEvent, EEGChunk
 from bci.experiment.bus import EventBus
-from bci.experiment.events import CalibrationStatus, DecisionEmitted, LiveWindowUpdated, ModelUpdated, PredictionProduced, TrialStarted
+from bci.experiment.events import (
+    CalibrationStatus,
+    DecisionEmitted,
+    FitFailed,
+    InferenceUpdated,
+    LiveWindowUpdated,
+    ModelUpdated,
+    PredictionProduced,
+    TrialStarted,
+)
 from bci.experiment.factory import build_realtime_experiment
 from bci.experiment.trial_builder import RealtimeTrialBuilder
 from bci.features.spectral import SpectralFeatureExtractor
@@ -65,6 +74,7 @@ def test_controller_smoke_exercises_evidence_accumulator(tmp_path):
     config.output.console = False
     config.experiment.max_idle_seconds = 2.0
     config.decision.consecutive_windows = 2
+    config.decision.posterior_threshold = 0.65
     bus = EventBus()
     decisions: list[DecisionEmitted] = []
     bus.subscribe(DecisionEmitted, decisions.append)
@@ -106,6 +116,30 @@ def test_manual_start_blocks_until_start_calibration_action(tmp_path):
     thread.join(timeout=20.0)
     assert not thread.is_alive()
     assert result_box["result"].n_trials > 0
+    assert all(event.event.command in {"LEFT", "RIGHT", "NONE"} for event in trials)
+
+
+def test_manual_challenge_does_not_process_late_calibration_trials(tmp_path):
+    config = load_config("configs/kalunga_v0.yaml")
+    config.experiment.mode = "classifier_smoke"
+    config.experiment.manual_start = True
+    config.output.console = False
+    config.experiment.max_idle_seconds = 5.0
+    bus = EventBus()
+    managed = build_realtime_experiment(config, bus=bus, artifact_dir=tmp_path)
+    result_box = {}
+    thread = threading.Thread(target=lambda: result_box.setdefault("result", managed.run()), daemon=True)
+    thread.start()
+    managed.engine.request_action(ProtocolAction.START_CALIBRATION)
+    deadline = time.time() + 10.0
+    while managed.engine.decoder.model_version == 0 and time.time() < deadline:
+        time.sleep(0.05)
+    assert managed.engine.decoder.model_version > 0
+    managed.engine.request_action(ProtocolAction.START_CHALLENGE)
+    thread.join(timeout=20.0)
+    assert not thread.is_alive()
+    features = (tmp_path / "features.csv").read_text(encoding="utf-8")
+    assert "reserve" not in features
 
 
 def test_immediate_decision_parameter_change_is_logged(tmp_path):
@@ -139,6 +173,44 @@ def test_live_preview_updates_at_stride_without_training_contamination(tmp_path)
     assert result.n_trials == result.metrics["n_features"]
     assert "preview" not in (tmp_path / "features.csv").read_text(encoding="utf-8")
     assert all(update.feature.split == "preview" for update in live_updates)
+
+
+def test_real_inference_emits_latent_trace(tmp_path):
+    config = load_config("configs/kalunga_v0.yaml")
+    config.experiment.mode = "classifier_smoke"
+    config.output.console = False
+    config.experiment.max_idle_seconds = 2.0
+    bus = EventBus()
+    traces: list[InferenceUpdated] = []
+    bus.subscribe(InferenceUpdated, traces.append)
+    result = build_realtime_experiment(config, bus=bus, artifact_dir=tmp_path).run()
+    assert result.model_version >= 1
+    assert traces
+    assert all(trace.prediction.model_version == result.model_version for trace in traces)
+    assert any(trace.latent_point is not None for trace in traces)
+
+
+def test_final_test_action_rejected_without_model(tmp_path):
+    config = load_config("configs/kalunga_v0.yaml")
+    config.experiment.mode = "classifier_smoke"
+    config.experiment.manual_start = True
+    config.output.console = False
+    bus = EventBus()
+    failures: list[FitFailed] = []
+    bus.subscribe(FitFailed, failures.append)
+    managed = build_realtime_experiment(config, bus=bus, artifact_dir=tmp_path)
+    result_box = {}
+    thread = threading.Thread(target=lambda: result_box.setdefault("result", managed.run()), daemon=True)
+    thread.start()
+    managed.engine.request_action(ProtocolAction.START_FINAL_TEST)
+    deadline = time.time() + 5.0
+    while not failures and time.time() < deadline:
+        time.sleep(0.05)
+    managed.stop()
+    thread.join(timeout=5.0)
+    assert not thread.is_alive()
+    assert any("before a model is trained" in failure.reason for failure in failures)
+    assert result_box["result"].n_trials == 0
 
 
 def test_replay_features_match_offline_features_synthetic():

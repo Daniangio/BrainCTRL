@@ -48,8 +48,8 @@ preprocessing:
 
 trials:
   onset_offset_seconds: 0.25
-  window_seconds: 1.0
-  inference_stride_seconds: 0.25
+  window_seconds: 2.0
+  inference_stride_seconds: 0.5
 
 features:
   type: spectral_relative_power
@@ -68,8 +68,8 @@ split:
   group_unit: original_trial
 
 calibration:
-  batch_size_trials: 6
-  minimum_trials_per_class_before_fit: 2
+  batch_size_trials: 3
+  minimum_trials_per_class_before_fit: 1
   refit_on_all_accumulated_data: true
 
 model:
@@ -85,13 +85,13 @@ protocol:
   mode: scientific
   classes: [LEFT, RIGHT, NONE]
   ordering: balanced_random
-  initial_calibration_per_class: 2
-  reserve_calibration_per_class: 3
+  initial_calibration_per_class: 1
+  reserve_calibration_per_class: 0
   challenge_per_class: 1
   final_test_per_class: 1
   append_calibration_per_class: 1
-  fit_every_new_events: 6
-  minimum_events_per_class_before_fit: 2
+  fit_every_new_events: 3
+  minimum_events_per_class_before_fit: 1
   challenge:
     metric: balanced_accuracy
     pass_threshold: 0.80

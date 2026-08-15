@@ -22,8 +22,8 @@ def test_annotation_decoding_one_hot():
     events = decode_one_hot_annotations(config, data, times, ["13", "17", "rest"])
     assert [(e.native_label, e.command, e.event_index) for e in events] == [
         ("13", "LEFT", 0),
-        ("17", None, None),
-        ("rest", "NONE", 1),
+        ("17", None, 1),
+        ("rest", "NONE", 2),
     ]
 
 
@@ -50,6 +50,17 @@ def test_pending_trial_resolution():
     assert len(trials) == 1
     assert trials[0].split == "calibration"
     assert trials[0].data.shape == (1, 5)
+
+
+def test_pending_trial_respects_allowed_splits():
+    config = load_config("configs/kalunga_v0.yaml")
+    config.trials.onset_offset_seconds = 0.0
+    config.trials.window_seconds = 0.5
+    builder = RealtimeTrialBuilder(config, {0: "calibration", 1: "validation"})
+    calibration = BCIEvent(0.5, 0.5, "13", "LEFT", event_index=0, dataset="Synthetic", subject=1, session="0", run="0")
+    validation = BCIEvent(1.0, 0.5, "21", "RIGHT", event_index=1, dataset="Synthetic", subject=1, session="0", run="0")
+    assert builder.add_event(calibration, allowed_splits={"validation"}) is None
+    assert builder.add_event(validation, allowed_splits={"validation"}) is not None
 
 
 def test_event_bus_delivery():

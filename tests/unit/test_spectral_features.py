@@ -39,3 +39,22 @@ def test_harmonics_above_nyquist_are_excluded():
     trial = make_sine(21.0, sfreq=80.0)
     record = SpectralFeatureExtractor(config).transform(trial)
     assert all("21Hz:h2" not in name and "21Hz:h3" not in name for name in record.feature_names)
+
+
+def test_spectral_extractor_preserves_channel_spectra():
+    config = load_config("configs/kalunga_v0.yaml")
+    trial = make_sine(13.0)
+    t = np.arange(trial.data.shape[1]) / trial.sfreq
+    trial = TrialRecord(
+        **{
+            **trial.__dict__,
+            "ch_names": ["Oz", "O1"],
+            "data": np.vstack([trial.data[0], 0.5 * np.sin(2 * np.pi * 21.0 * t)]),
+        }
+    )
+    record = SpectralFeatureExtractor(config).transform(trial)
+    assert record.spectral_power is not None
+    assert record.spectral_power.shape[0] == 2
+    assert record.spectral_freqs is not None
+    assert record.spectral_power.shape[1] == record.spectral_freqs.size
+    assert record.spectral_channel_names == ["Oz", "O1"]

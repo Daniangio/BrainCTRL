@@ -25,6 +25,7 @@ from bci.experiment.events import (
     FitFailed,
     FitStarted,
     GroundTruthChanged,
+    InferenceUpdated,
     LiveWindowUpdated,
     ModelUpdated,
     ParameterChanged,
@@ -145,6 +146,7 @@ class RealtimeExperimentEngine:
         self.event_source.connect()
         self.bus.publish(StreamConnected(metadata))
         ring = TimestampedRingBuffer(self.config.source.lsl.buffer_seconds, metadata.sfreq, metadata.ch_names)
+        raw_ring = TimestampedRingBuffer(self.config.source.lsl.buffer_seconds, metadata.sfreq, metadata.ch_names)
         trial_builder = RealtimeTrialBuilder(self.config, self.split_by_event)
         idle_started = time.monotonic()
         if not self.config.experiment.manual_start:
@@ -159,13 +161,15 @@ class RealtimeExperimentEngine:
                 chunk = self._poll_eeg()
                 if chunk is not None:
                     did_work = True
+                    raw_chunk = chunk
+                    raw_ring.append(raw_chunk)
                     if self.streaming_preprocessor is not None:
                         chunk = self.streaming_preprocessor.process_chunk(chunk)
                     ring.append(chunk)
                     if not getattr(self.eeg_source, "externally_paced", False):
-                        self.clock.wait_for_chunk(chunk.data.shape[1] / chunk.sfreq)
+                        self.clock.wait_for_chunk(raw_chunk.data.shape[1] / raw_chunk.sfreq)
                     idle_started = time.monotonic()
-                    self._maybe_publish_eeg_window(ring)
+                    self._maybe_publish_eeg_window(raw_ring)
                     if hasattr(self.event_source, "advance_to") and ring.latest_time is not None:
                         self.event_source.advance_to(ring.latest_time)  # type: ignore[attr-defined]
                     self._maybe_publish_live_preview(ring)
@@ -173,18 +177,22 @@ class RealtimeExperimentEngine:
                 if events:
                     did_work = True
                 for event in events:
-                    pending = trial_builder.add_event(event)
+                    allowed_splits = self._allowed_splits_for_current_phase()
+                    pending = trial_builder.add_event(event, allowed_splits=allowed_splits)
                     if pending is not None:
                         self.bus.publish(TrialStarted(event))
-                        split_key = (event.event_index or 0) * 1000
-                        split = self.split_by_event.get(split_key, self.split_by_event.get(event.event_index or 0))
+                        split = pending.split
                         self.bus.publish(GroundTruthChanged(event.command, event.native_label, event.event_index, split))
                 trials = trial_builder.resolve(ring)
                 if trials:
                     did_work = True
                 for trial in trials:
+                    if not self._trial_allowed_for_current_phase(trial):
+                        continue
                     self.bus.publish(TrialCompleted(trial))
                     feature = self.feature_extractor.transform(self.preprocessor.transform(trial))
+                    if not self._feature_allowed_for_current_phase(feature):
+                        continue
                     self._all_features.append(feature)
                     self.bus.publish(FeatureComputed(feature))
                     self._route_feature(feature)
@@ -218,7 +226,8 @@ class RealtimeExperimentEngine:
 
     def _route_feature(self, feature: FeatureRecord) -> None:
         if feature.split == "calibration":
-            self._set_phase(CalibrationPhase.CALIBRATION_STREAMING)
+            if not self.config.experiment.manual_start:
+                self._set_phase(CalibrationPhase.CALIBRATION_STREAMING)
             self._calibration.append(feature)
             source_event_id = int(feature.provenance.get("source_event_id", feature.provenance["event_index"]))
             if source_event_id not in self._fitted_source_events:
@@ -230,11 +239,13 @@ class RealtimeExperimentEngine:
             self.bus.publish(self._calibration_status())
             return
         if feature.split == "validation":
-            self._set_phase(CalibrationPhase.CHALLENGE_STREAMING)
+            if not self.config.experiment.manual_start:
+                self._set_phase(CalibrationPhase.CHALLENGE_STREAMING)
             self._predict_and_emit(feature, self._validation_predictions, self._validation_decisions)
             return
         if feature.split == "test":
-            self._set_phase(CalibrationPhase.FINAL_TEST_STREAMING)
+            if not self.config.experiment.manual_start:
+                self._set_phase(CalibrationPhase.FINAL_TEST_STREAMING)
             self._predict_and_emit(feature, self._test_predictions, self._test_decisions)
             return
         if feature.split == "reserve":
@@ -242,6 +253,27 @@ class RealtimeExperimentEngine:
         if self.decoder.model_version:
             self._set_phase(CalibrationPhase.INFERENCE)
             self._predict_and_emit(feature, self._test_predictions)
+
+    def _allowed_splits_for_current_phase(self) -> set[str] | None:
+        if not self.config.experiment.manual_start:
+            return None
+        if self._phase == CalibrationPhase.CALIBRATION_STREAMING:
+            return {"calibration"}
+        if self._phase == CalibrationPhase.APPEND_CALIBRATION:
+            return {"reserve"}
+        if self._phase == CalibrationPhase.CHALLENGE_STREAMING:
+            return {"validation"}
+        if self._phase == CalibrationPhase.FINAL_TEST_STREAMING:
+            return {"test"}
+        return set()
+
+    def _trial_allowed_for_current_phase(self, trial: TrialRecord) -> bool:
+        allowed = self._allowed_splits_for_current_phase()
+        return allowed is None or trial.split in allowed
+
+    def _feature_allowed_for_current_phase(self, feature: FeatureRecord) -> bool:
+        allowed = self._allowed_splits_for_current_phase()
+        return allowed is None or feature.split in allowed
 
     def _maybe_publish_eeg_window(self, ring: TimestampedRingBuffer) -> None:
         if ring.latest_time is None or ring.earliest_time is None:
@@ -309,7 +341,7 @@ class RealtimeExperimentEngine:
                 timestamp=end,
             )
             decision = self._preview_decision(prediction)
-        latent_point = self._preview_latent_point(feature)
+        latent_point = self._latent_point(feature)
         self.bus.publish(LiveWindowUpdated(feature, prediction, decision, latent_point))
 
     def _preview_decision(self, prediction: Prediction) -> Decision:
@@ -330,7 +362,7 @@ class RealtimeExperimentEngine:
             required_consecutive=1,
         )
 
-    def _preview_latent_point(self, feature: FeatureRecord) -> list[float] | None:
+    def _latent_point(self, feature: FeatureRecord) -> list[float] | None:
         try:
             point = self.decoder.transform_latent(feature.values)[0]
         except (NotImplementedError, RuntimeError, ValueError, AttributeError):
@@ -454,6 +486,7 @@ class RealtimeExperimentEngine:
         if decision_sink is not None:
             decision_sink.append(decision)
         self.bus.publish(DecisionEmitted(decision))
+        self.bus.publish(InferenceUpdated(feature, prediction, decision, self._latent_point(feature)))
         for command_sink in self.sinks:
             command_sink.emit(decision)
 
@@ -533,6 +566,9 @@ class RealtimeExperimentEngine:
             return
         if action == ProtocolAction.UPDATE_DECISION_PARAMS:
             self._update_decision_params(payload)
+            return
+        if action in {ProtocolAction.START_CHALLENGE, ProtocolAction.START_FINAL_TEST} and self.decoder.model_version == 0:
+            self.bus.publish(FitFailed("cannot start inference phase before a model is trained"))
             return
         new_state = self._state_machine.transition(action)
         self._set_phase(new_state)

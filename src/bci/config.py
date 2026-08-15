@@ -77,8 +77,8 @@ class PreprocessingConfig(BaseModel):
 
 class TrialConfig(BaseModel):
     onset_offset_seconds: float = 0.25
-    window_seconds: float = 1.0
-    inference_stride_seconds: float = 0.25
+    window_seconds: float = 2.0
+    inference_stride_seconds: float = 0.5
 
 
 class FeatureConfig(BaseModel):
@@ -107,8 +107,8 @@ class SplitConfig(BaseModel):
 
 
 class CalibrationConfig(BaseModel):
-    batch_size_trials: int = 6
-    minimum_trials_per_class_before_fit: int = 2
+    batch_size_trials: int = 3
+    minimum_trials_per_class_before_fit: int = 1
     refit_on_all_accumulated_data: bool = True
 
 
@@ -137,13 +137,13 @@ class ProtocolConfig(BaseModel):
     mode: Literal["scientific", "exploratory"] = "scientific"
     classes: list[Command] = Field(default_factory=lambda: ["LEFT", "RIGHT", "NONE"])
     ordering: Literal["balanced_random", "grouped_by_class", "original_dataset_order"] = "balanced_random"
-    initial_calibration_per_class: int = 2
-    reserve_calibration_per_class: int = 3
+    initial_calibration_per_class: int = 1
+    reserve_calibration_per_class: int = 0
     challenge_per_class: int = 1
     final_test_per_class: int = 1
     append_calibration_per_class: int = 1
-    fit_every_new_events: int = 6
-    minimum_events_per_class_before_fit: int = 2
+    fit_every_new_events: int = 3
+    minimum_events_per_class_before_fit: int = 1
     challenge: ChallengeConfig = Field(default_factory=ChallengeConfig)
     final_test: FinalTestConfig = Field(default_factory=FinalTestConfig)
 
