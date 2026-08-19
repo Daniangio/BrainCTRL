@@ -9,18 +9,19 @@ from bci.models.riemannian import RiemannianMDMDecoder
 
 
 def covariance_record(label: str, matrix: np.ndarray, trial_id: str) -> FeatureRecord:
-    tri_i, tri_j = np.triu_indices(matrix.shape[0])
+    matrices = matrix[None, :, :] if matrix.ndim == 2 else matrix
+    tri_i, tri_j = np.triu_indices(matrices.shape[1])
     return FeatureRecord(
         trial_id=trial_id,
         label=label,
         split="calibration",
-        values=matrix[tri_i, tri_j],
+        values=np.concatenate([band[tri_i, tri_j] for band in matrices]),
         feature_names=[f"cov{i}{j}" for i, j in zip(tri_i, tri_j)],
         frequency_scores={},
         provenance={"end_time": 0.0, "event_index": 0},
         config_hash="test",
-        covariance_matrices=matrix[None, :, :],
-        covariance_band_names=["broad"],
+        covariance_matrices=matrices,
+        covariance_band_names=[f"band{i + 1}" for i in range(matrices.shape[0])],
         representation_type="covariance",
     )
 
@@ -46,3 +47,21 @@ def test_decoder_factory_selects_riemannian_mdm():
     config = load_config("configs/kalunga_v0.yaml")
     config.model.type = "riemannian_mdm"
     assert isinstance(get_decoder(config), RiemannianMDMDecoder)
+
+
+def test_riemannian_mdm_fuses_multiple_covariance_bands():
+    config = load_config("configs/kalunga_v0.yaml")
+    decoder = RiemannianMDMDecoder(config)
+    shared = np.eye(2)
+    left_band = np.diag([4.0, 1.0])
+    right_band = np.diag([1.0, 4.0])
+    records = [
+        covariance_record("LEFT", np.asarray([shared, left_band]), "left-1"),
+        covariance_record("LEFT", np.asarray([shared, np.diag([4.2, 1.0])]), "left-2"),
+        covariance_record("RIGHT", np.asarray([shared, right_band]), "right-1"),
+        covariance_record("RIGHT", np.asarray([shared, np.diag([1.0, 4.2])]), "right-2"),
+    ]
+    decoder.fit(records)
+    probs = decoder.predict(covariance_record("RIGHT", np.asarray([shared, np.diag([1.0, 4.1])]), "probe"))
+    assert probs["RIGHT"] > probs["LEFT"]
+    assert "band2:LEFT_vs_RIGHT" in decoder.diagnostics().separation

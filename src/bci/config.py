@@ -198,6 +198,30 @@ class QualityConfig(BaseModel):
     max_bad_channels_fraction: float = 0.34
 
 
+class AlignmentConfig(BaseModel):
+    type: Literal["none", "euclidean"] = "none"
+    enabled: bool = False
+    mode: Literal["warmup_freeze", "slow_online"] = "warmup_freeze"
+    warmup_seconds: float = 15.0
+    update_tau_seconds: float = 30.0
+    min_quality: float = 0.60
+    regularization: float = 1.0e-6
+
+
+class AdaptationConfig(BaseModel):
+    enabled: bool = False
+    type: str = "riemannian_prototype"
+    min_temporal_posterior: float = 0.95
+    min_margin: float = 0.40
+    min_dwell_seconds: float = 1.25
+    switch_exclusion_seconds: float = 0.75
+    max_updates_per_second: float = 1.0
+    eta: float = 0.02
+    anchor_gamma: float = 0.35
+    max_anchor_distance: float = 2.5
+    allowed_phases: list[str] = Field(default_factory=lambda: ["INFERENCE", "CHALLENGE_STREAMING"])
+
+
 class UDPConfig(BaseModel):
     enabled: bool = False
     host: str = "127.0.0.1"
@@ -262,6 +286,8 @@ class BCIConfig(BaseModel):
     baselines: BaselineConfig = Field(default_factory=BaselineConfig)
     decision: DecisionConfig = Field(default_factory=DecisionConfig)
     quality: QualityConfig = Field(default_factory=QualityConfig)
+    alignment: AlignmentConfig = Field(default_factory=AlignmentConfig)
+    adaptation: AdaptationConfig = Field(default_factory=AdaptationConfig)
     output: OutputConfig = Field(default_factory=OutputConfig)
     evaluation: EvaluationConfig = Field(default_factory=EvaluationConfig)
     experiment: ExperimentConfig = Field(default_factory=ExperimentConfig)

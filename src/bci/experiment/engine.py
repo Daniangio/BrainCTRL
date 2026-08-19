@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from bci.adaptation.riemannian import RiemannianPrototypeAdaptor
 from bci.buffering.ring import TimestampedRingBuffer
 from bci.config import BCIConfig, write_resolved_config
 from bci.domain import BCIEvent, CalibrationPhase, Decision, FeatureRecord, OnlineObservation, Prediction, TrialRecord
@@ -40,6 +41,7 @@ from bci.experiment.events import (
     TrialStarted,
 )
 from bci.experiment.trial_builder import RealtimeTrialBuilder
+from bci.features.alignment import EuclideanAlignment
 from bci.features.base import FeatureExtractor
 from bci.inference.decision import DecisionPolicy
 from bci.inference.quality import quality_adjust_prediction
@@ -110,6 +112,7 @@ class RealtimeExperimentEngine:
         self._history: list[dict[str, Any]] = []
         self._decisions: list[Decision] = []
         self._parameter_changes: list[dict[str, Any]] = []
+        self._adaptation_log: list[dict[str, Any]] = []
         self._seen_events: list[BCIEvent] = []
         self._new_source_events_since_fit: set[int] = set()
         self._fitted_source_events: set[int] = set()
@@ -119,6 +122,8 @@ class RealtimeExperimentEngine:
         self._last_eeg_gui_publish_time: float | None = None
         self._manual_calibration_seconds = {label: 0.0 for label in config.protocol.classes}
         self.quality_estimator = SignalQualityEstimator(config) if config.quality.enabled else None
+        self.aligner = EuclideanAlignment(config)
+        self.adaptor = RiemannianPrototypeAdaptor(config)
 
     def stop(self) -> None:
         self._stop = True
@@ -152,6 +157,8 @@ class RealtimeExperimentEngine:
             self.streaming_preprocessor.reset(metadata)
         if self.quality_estimator is not None:
             self.quality_estimator.reset()
+        self.aligner.reset()
+        self.adaptor.reset()
         self.event_source.connect()
         self.bus.publish(StreamConnected(metadata))
         ring = TimestampedRingBuffer(self.config.source.lsl.buffer_seconds, metadata.sfreq, metadata.ch_names)
@@ -203,6 +210,7 @@ class RealtimeExperimentEngine:
                         continue
                     self.bus.publish(TrialCompleted(trial))
                     feature = self.feature_extractor.transform(self.preprocessor.transform(trial))
+                    feature = self.aligner.update_transform(feature)
                     if not self._feature_allowed_for_current_phase(feature):
                         continue
                     self._all_features.append(feature)
@@ -373,6 +381,7 @@ class RealtimeExperimentEngine:
         self._last_online_inference_time = latest
         feature = self.feature_extractor.transform(self.preprocessor.transform(trial))
         quality = self.quality_estimator.estimate(chunk.data, ring.sfreq, list(ring.ch_names)) if self.quality_estimator is not None else None
+        feature = self.aligner.update_transform(feature, quality)
         prediction: Prediction | None = None
         evidence_prediction: Prediction | None = None
         decision: Decision | None = None
@@ -410,11 +419,15 @@ class RealtimeExperimentEngine:
             quality_action=quality_action,
             current_ground_truth_if_known=ground_truth,
             model_version=self.decoder.model_version,
+            alignment_version=feature.alignment_version,
             emitted=emitted,
         )
         self._online_observations.append(observation)
         self.bus.publish(OnlineInferenceProduced(observation, latent_point))
         self.bus.publish(LiveWindowUpdated(feature, prediction, decision, latent_point))
+        adaptation_row = self.adaptor.update(observation, self.decoder)
+        if adaptation_row["reason"] != "disabled":
+            self._adaptation_log.append(adaptation_row)
 
     def _online_control_allowed(self) -> bool:
         if self._phase in {
@@ -652,6 +665,8 @@ class RealtimeExperimentEngine:
         self._write_decisions_file("challenge_decisions.csv", self._validation_decisions)
         self._write_decisions_file("final_test_decisions.csv", self._test_decisions)
         self._write_online_observations()
+        self._write_alignment_status()
+        self._write_adaptation_log()
         self._write_parameter_changes()
         if self._test_predictions:
             (self.artifact_dir / "final_test_metrics.json").write_text(json.dumps(metrics["test"], indent=2), encoding="utf-8")
@@ -861,6 +876,7 @@ class RealtimeExperimentEngine:
             "decision_reason",
             "decision_confidence",
             "model_version",
+            "alignment_version",
             "emitted",
             "probabilities",
             "evidence_probabilities",
@@ -899,6 +915,7 @@ class RealtimeExperimentEngine:
             "decision_reason": decision.reason if decision is not None else None,
             "decision_confidence": decision.confidence if decision is not None else None,
             "model_version": observation.model_version,
+            "alignment_version": observation.alignment_version,
             "emitted": observation.emitted,
             "probabilities": json.dumps(prediction.probabilities, sort_keys=True) if prediction is not None else "{}",
             "evidence_probabilities": json.dumps(evidence_prediction.probabilities, sort_keys=True)
@@ -909,6 +926,33 @@ class RealtimeExperimentEngine:
             "quality_action": observation.quality_action,
             "quality_history_ready": observation.quality.history_ready if observation.quality is not None else False,
         }
+
+    def _write_alignment_status(self) -> None:
+        (self.artifact_dir / "alignment_status.json").write_text(
+            json.dumps(self.aligner.snapshot(), indent=2, sort_keys=True),
+            encoding="utf-8",
+        )
+
+    def _write_adaptation_log(self) -> None:
+        path = self.artifact_dir / "adaptation_log.csv"
+        fieldnames = [
+            "timestamp",
+            "window_id",
+            "phase",
+            "label",
+            "confidence",
+            "quality_score",
+            "model_version_before",
+            "model_version_after",
+            "margin",
+            "dwell_seconds",
+            "accepted",
+            "reason",
+        ]
+        with path.open("w", newline="", encoding="utf-8") as f:
+            writer = csv.DictWriter(f, fieldnames=fieldnames)
+            writer.writeheader()
+            writer.writerows(self._adaptation_log)
 
     def _write_parameter_changes(self) -> None:
         with (self.artifact_dir / "parameter_change_log.csv").open("w", newline="", encoding="utf-8") as f:

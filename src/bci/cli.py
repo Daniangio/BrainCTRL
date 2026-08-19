@@ -5,6 +5,7 @@ import json
 import sys
 
 from bci.config import load_config
+from bci.evaluation.loso import run_loso_benchmark
 from bci.evaluation.runner import bootstrap_dataset, run_evaluation
 from bci.experiment.factory import build_realtime_experiment
 from bci.registry import get_dataset_adapter
@@ -15,7 +16,7 @@ from bci.sources.replay import MOABBReplayPublisher
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="bci")
     sub = parser.add_subparsers(dest="command", required=True)
-    for name in ["bootstrap", "evaluate", "replay", "run", "inspect", "experiment", "gui"]:
+    for name in ["bootstrap", "evaluate", "loso", "replay", "run", "inspect", "experiment", "gui"]:
         p = sub.add_parser(name)
         p.add_argument("--config", required=True)
         p.add_argument("--subject", type=int)
@@ -40,6 +41,10 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if args.command == "evaluate":
         metrics = run_evaluation(config, "eval")
+        print(json.dumps(metrics, indent=2))
+        return 0
+    if args.command == "loso":
+        metrics = run_loso_benchmark(config, "loso")
         print(json.dumps(metrics, indent=2))
         return 0
     if args.command == "replay":

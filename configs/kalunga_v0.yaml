@@ -145,6 +145,28 @@ quality:
   line_frequency_hz: 50.0
   max_bad_channels_fraction: 0.34
 
+alignment:
+  type: none
+  enabled: false
+  mode: warmup_freeze
+  warmup_seconds: 15.0
+  update_tau_seconds: 30.0
+  min_quality: 0.60
+  regularization: 1.0e-6
+
+adaptation:
+  enabled: false
+  type: riemannian_prototype
+  min_temporal_posterior: 0.95
+  min_margin: 0.40
+  min_dwell_seconds: 1.25
+  switch_exclusion_seconds: 0.75
+  max_updates_per_second: 1.0
+  eta: 0.02
+  anchor_gamma: 0.35
+  max_anchor_distance: 2.5
+  allowed_phases: [INFERENCE, CHALLENGE_STREAMING]
+
 output:
   console: true
   udp:

@@ -12,6 +12,7 @@ from bci.config import BCIConfig, write_resolved_config
 from bci.domain import FeatureRecord, Prediction
 from bci.evaluation.metrics import summarize_predictions
 from bci.evaluation.plots import save_confusion_matrix
+from bci.features.alignment import EuclideanAlignment
 from bci.features.factory import get_feature_extractor
 from bci.inference.engine import prediction_from_feature
 from bci.models.base import Decoder
@@ -52,7 +53,8 @@ def prepare_features(config: BCIConfig, artifact_dir: Path) -> tuple[list[Featur
     split_trials = apply_split(trials, manifest)
     preprocessor = StandardPreprocessor(config)
     extractor = get_feature_extractor(config)
-    features = [extractor.transform(preprocessor.transform(t)) for t in split_trials]
+    aligner = EuclideanAlignment(config)
+    features = [aligner.update_transform(extractor.transform(preprocessor.transform(t))) for t in split_trials]
     write_split_manifest(split_trials, artifact_dir / "split_manifest.csv")
     return features, metadata
 
