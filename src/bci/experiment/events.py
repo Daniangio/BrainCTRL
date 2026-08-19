@@ -10,6 +10,7 @@ from bci.domain import (
     EEGChunk,
     EEGMetadata,
     FeatureRecord,
+    OnlineObservation,
     Prediction,
     TrialRecord,
 )
@@ -55,10 +56,16 @@ class LiveWindowUpdated:
 
 
 @dataclass(frozen=True)
+class OnlineInferenceProduced:
+    observation: OnlineObservation
+    latent_point: list[float] | None = None
+
+
+@dataclass(frozen=True)
 class InferenceUpdated:
     feature: FeatureRecord
     prediction: Prediction
-    decision: Decision
+    decision: Decision | None
     latent_point: list[float] | None = None
 
 

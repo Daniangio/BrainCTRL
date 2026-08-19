@@ -163,6 +163,17 @@ class DecisionConfig(BaseModel):
     emit_none: bool = True
 
 
+class QualityConfig(BaseModel):
+    enabled: bool = True
+    warmup_seconds: float = 15.0
+    history_tau_seconds: float = 30.0
+    hard_reject_threshold: float = 0.25
+    adaptation_min_quality: float = 0.80
+    high_frequency_start_hz: float = 35.0
+    line_frequency_hz: float = 50.0
+    max_bad_channels_fraction: float = 0.34
+
+
 class UDPConfig(BaseModel):
     enabled: bool = False
     host: str = "127.0.0.1"
@@ -197,6 +208,8 @@ class ExperimentConfig(BaseModel):
     max_idle_seconds: float = 15.0
     synthetic_difficulty: Literal["perfect", "easy", "noisy"] = "easy"
     live_preview: bool = True
+    online_inference: bool = True
+    online_inference_stride_seconds: float | None = None
 
 
 class GUIConfig(BaseModel):
@@ -224,6 +237,7 @@ class BCIConfig(BaseModel):
     protocol: ProtocolConfig = Field(default_factory=ProtocolConfig)
     baselines: BaselineConfig = Field(default_factory=BaselineConfig)
     decision: DecisionConfig = Field(default_factory=DecisionConfig)
+    quality: QualityConfig = Field(default_factory=QualityConfig)
     output: OutputConfig = Field(default_factory=OutputConfig)
     evaluation: EvaluationConfig = Field(default_factory=EvaluationConfig)
     experiment: ExperimentConfig = Field(default_factory=ExperimentConfig)

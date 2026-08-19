@@ -130,6 +130,30 @@ class Decision:
     required_consecutive: int = 0
 
 
+@dataclass(frozen=True)
+class SignalQuality:
+    score: float
+    flags: list[str]
+    per_channel: dict[str, float]
+    metrics: dict[str, float]
+    history_ready: bool
+
+
+@dataclass(frozen=True)
+class OnlineObservation:
+    window_id: str
+    window_start: float
+    window_end: float
+    phase: CalibrationPhase
+    feature: FeatureRecord
+    prediction: Prediction | None
+    decision: Decision | None
+    quality: SignalQuality | None = None
+    current_ground_truth_if_known: str | None = None
+    model_version: int = 0
+    emitted: bool = False
+
+
 @dataclass
 class CalibrationState:
     phase: CalibrationPhase = CalibrationPhase.BOOTSTRAP

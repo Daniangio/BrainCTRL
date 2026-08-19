@@ -16,6 +16,7 @@ from bci.experiment.events import (
     InferenceUpdated,
     LiveWindowUpdated,
     ModelUpdated,
+    OnlineInferenceProduced,
     PredictionProduced,
     TrialStarted,
 )
@@ -167,15 +168,51 @@ def test_live_preview_updates_at_stride_without_training_contamination(tmp_path)
     config.trials.inference_stride_seconds = 0.25
     bus = EventBus()
     live_updates: list[LiveWindowUpdated] = []
+    online_updates: list[OnlineInferenceProduced] = []
     bus.subscribe(LiveWindowUpdated, live_updates.append)
+    bus.subscribe(OnlineInferenceProduced, online_updates.append)
     result = build_realtime_experiment(config, bus=bus, artifact_dir=tmp_path).run()
     assert len(live_updates) >= 20
+    assert len(online_updates) == len(live_updates)
     assert any(update.prediction is not None for update in live_updates)
     assert any(update.latent_point is not None for update in live_updates)
-    assert all(update.decision is None or update.decision.reason.startswith("preview_") for update in live_updates)
+    assert any(update.observation.emitted for update in online_updates)
+    assert all(
+        update.decision is None or not update.decision.reason.startswith("preview_")
+        for update in live_updates
+    )
     assert result.n_trials == result.metrics["n_features"]
+    assert result.metrics["n_online_observations"] == len(online_updates)
     assert "preview" not in (tmp_path / "features.csv").read_text(encoding="utf-8")
-    assert all(update.feature.split == "preview" for update in live_updates)
+    assert all(update.feature.split == "online" for update in live_updates)
+    observations = (tmp_path / "online_observations.csv").read_text(encoding="utf-8").splitlines()
+    assert len(observations) == len(online_updates) + 1
+
+
+def test_authoritative_online_inference_avoids_event_decision_double_updates(tmp_path):
+    config = load_config("configs/kalunga_v0.yaml")
+    config.experiment.mode = "controller_smoke"
+    config.output.console = False
+    config.experiment.max_idle_seconds = 2.0
+    config.trials.window_seconds = 1.0
+    config.trials.inference_stride_seconds = 0.25
+    config.decision.consecutive_windows = 2
+    config.decision.posterior_threshold = 0.65
+    bus = EventBus()
+    decisions: list[DecisionEmitted] = []
+    online_updates: list[OnlineInferenceProduced] = []
+    bus.subscribe(DecisionEmitted, decisions.append)
+    bus.subscribe(OnlineInferenceProduced, online_updates.append)
+    result = build_realtime_experiment(config, bus=bus, artifact_dir=tmp_path).run()
+    emitted_online = [update for update in online_updates if update.observation.emitted]
+    assert result.model_version >= 1
+    assert decisions
+    assert len(decisions) == len(emitted_online)
+    assert all(update.observation.decision is not None for update in emitted_online)
+    assert [
+        update.observation.decision.timestamp for update in emitted_online if update.observation.decision is not None
+    ] == [event.decision.timestamp for event in decisions]
+    assert len(decisions) < result.metrics["validation"]["n"] + result.metrics["test"]["n"] + len(emitted_online)
 
 
 def test_real_inference_emits_latent_trace(tmp_path):

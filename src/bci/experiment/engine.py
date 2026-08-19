@@ -10,7 +10,7 @@ from typing import Any
 
 from bci.buffering.ring import TimestampedRingBuffer
 from bci.config import BCIConfig, write_resolved_config
-from bci.domain import CalibrationPhase, Decision, FeatureRecord, Prediction, TrialRecord
+from bci.domain import BCIEvent, CalibrationPhase, Decision, FeatureRecord, OnlineObservation, Prediction, TrialRecord
 from bci.evaluation.metrics import summarize_predictions
 from bci.experiment.bus import EventBus
 from bci.experiment.events import (
@@ -28,6 +28,7 @@ from bci.experiment.events import (
     InferenceUpdated,
     LiveWindowUpdated,
     ModelUpdated,
+    OnlineInferenceProduced,
     ParameterChanged,
     PhaseChanged,
     PredictionProduced,
@@ -43,6 +44,7 @@ from bci.features.base import FeatureExtractor
 from bci.inference.decision import DecisionPolicy
 from bci.models.base import Decoder
 from bci.preprocessing.base import Preprocessor
+from bci.preprocessing.quality import SignalQualityEstimator
 from bci.protocol.state_machine import ProtocolAction, ProtocolCommand, ProtocolStateMachine
 from bci.replay.clock import ReplayClock
 from bci.sinks.base import CommandSink
@@ -103,16 +105,19 @@ class RealtimeExperimentEngine:
         self._validation_decisions: list[Decision] = []
         self._test_decisions: list[Decision] = []
         self._all_features: list[FeatureRecord] = []
+        self._online_observations: list[OnlineObservation] = []
         self._history: list[dict[str, Any]] = []
         self._decisions: list[Decision] = []
         self._parameter_changes: list[dict[str, Any]] = []
+        self._seen_events: list[BCIEvent] = []
         self._new_source_events_since_fit: set[int] = set()
         self._fitted_source_events: set[int] = set()
         self._actions: queue.Queue[ProtocolCommand] = queue.Queue()
-        self._last_live_preview_time: float | None = None
-        self._live_preview_counter = 0
+        self._last_online_inference_time: float | None = None
+        self._online_inference_counter = 0
         self._last_eeg_gui_publish_time: float | None = None
         self._manual_calibration_seconds = {label: 0.0 for label in config.protocol.classes}
+        self.quality_estimator = SignalQualityEstimator(config) if config.quality.enabled else None
 
     def stop(self) -> None:
         self._stop = True
@@ -144,6 +149,8 @@ class RealtimeExperimentEngine:
         metadata = self.eeg_source.connect()
         if self.streaming_preprocessor is not None:
             self.streaming_preprocessor.reset(metadata)
+        if self.quality_estimator is not None:
+            self.quality_estimator.reset()
         self.event_source.connect()
         self.bus.publish(StreamConnected(metadata))
         ring = TimestampedRingBuffer(self.config.source.lsl.buffer_seconds, metadata.sfreq, metadata.ch_names)
@@ -173,10 +180,10 @@ class RealtimeExperimentEngine:
                     self._maybe_publish_eeg_window(raw_ring)
                     if hasattr(self.event_source, "advance_to") and ring.latest_time is not None:
                         self.event_source.advance_to(ring.latest_time)  # type: ignore[attr-defined]
-                    self._maybe_publish_live_preview(ring)
                 events = self.event_source.poll()
                 if events:
                     did_work = True
+                    self._seen_events.extend(events)
                 for event in events:
                     if self.config.experiment.manual_start and self._phase == CalibrationPhase.CALIBRATION_STREAMING:
                         pending = self._add_manual_calibration_event(trial_builder, event)
@@ -202,6 +209,8 @@ class RealtimeExperimentEngine:
                     self._route_feature(feature)
                     if self.config.experiment.max_trials and len(self._all_features) >= self.config.experiment.max_trials:
                         self._stop = True
+                if chunk is not None:
+                    self._maybe_run_online_inference(ring)
                 if self._is_complete():
                     self._stop = True
                 if time.monotonic() - idle_started > self.config.experiment.max_idle_seconds:
@@ -271,12 +280,18 @@ class RealtimeExperimentEngine:
         if feature.split == "validation":
             if not self.config.experiment.manual_start:
                 self._set_phase(CalibrationPhase.CHALLENGE_STREAMING)
-            self._predict_and_emit(feature, self._validation_predictions, self._validation_decisions)
+            if self.config.experiment.online_inference:
+                self._predict_for_evaluation(feature, self._validation_predictions)
+            else:
+                self._predict_and_emit(feature, self._validation_predictions, self._validation_decisions)
             return
         if feature.split == "test":
             if not self.config.experiment.manual_start:
                 self._set_phase(CalibrationPhase.FINAL_TEST_STREAMING)
-            self._predict_and_emit(feature, self._test_predictions, self._test_decisions)
+            if self.config.experiment.online_inference:
+                self._predict_for_evaluation(feature, self._test_predictions)
+            else:
+                self._predict_and_emit(feature, self._test_predictions, self._test_decisions)
             return
         if feature.split == "reserve":
             return
@@ -323,12 +338,12 @@ class RealtimeExperimentEngine:
         self._last_eeg_gui_publish_time = latest
         self.bus.publish(EEGWindowReady(window))
 
-    def _maybe_publish_live_preview(self, ring: TimestampedRingBuffer) -> None:
-        if not self.config.experiment.live_preview or ring.latest_time is None:
+    def _maybe_run_online_inference(self, ring: TimestampedRingBuffer) -> None:
+        if not (self.config.experiment.live_preview or self.config.experiment.online_inference) or ring.latest_time is None:
             return
         latest = ring.latest_time
-        stride = self.config.trials.inference_stride_seconds
-        if self._last_live_preview_time is not None and latest - self._last_live_preview_time < stride:
+        stride = self.config.experiment.online_inference_stride_seconds or self.config.trials.inference_stride_seconds
+        if self._last_online_inference_time is not None and latest - self._last_online_inference_time < stride:
             return
         start = latest - self.config.trials.window_seconds
         end = latest
@@ -337,60 +352,88 @@ class RealtimeExperimentEngine:
         expected_samples = int(round(self.config.trials.window_seconds * ring.sfreq))
         chunk = ring.slice(start, end, expected_samples=expected_samples)
         trial = TrialRecord(
-            trial_id=f"live-preview-{self._live_preview_counter}",
+            trial_id=f"online-{self._online_inference_counter:06d}",
             dataset=self.config.dataset.name,
             subject=self.config.dataset.subjects[0] if self.config.dataset.subjects else 0,
             session="live",
             run="live",
             event_index=-1,
-            native_label="live_preview",
-            command="NONE",
+            native_label="online",
+            command=self._ground_truth_for_window(start, end) or "NONE",
             start_time=start,
             end_time=end,
             sfreq=ring.sfreq,
             ch_names=list(ring.ch_names),
             data=chunk.data,
             source_event_id=None,
-            split="preview",
+            split="online",
         )
-        self._live_preview_counter += 1
-        self._last_live_preview_time = latest
+        self._online_inference_counter += 1
+        self._last_online_inference_time = latest
         feature = self.feature_extractor.transform(self.preprocessor.transform(trial))
+        quality = self.quality_estimator.estimate(chunk.data, ring.sfreq, list(ring.ch_names)) if self.quality_estimator is not None else None
         prediction: Prediction | None = None
         decision: Decision | None = None
+        emitted = False
+        ground_truth = self._ground_truth_for_window(start, end)
         if self.decoder.model_version:
-            probs = self.decoder.predict(feature)
-            label, confidence = max(probs.items(), key=lambda item: item[1])
-            prediction = Prediction(
-                trial_id=feature.trial_id,
-                true_label=None,
-                probabilities=probs,
-                predicted_label=label,
-                confidence=float(confidence),
-                model_version=self.decoder.model_version,
-                timestamp=end,
-            )
-            decision = self._preview_decision(prediction)
+            prediction = self._make_prediction(feature, true_label=ground_truth)
+            if self.config.experiment.online_inference and self._online_control_allowed():
+                decision = self.decision_policy.update(prediction)
+                self._decisions.append(decision)
+                decision_sink = self._online_decision_sink_for_phase()
+                if decision_sink is not None:
+                    decision_sink.append(decision)
+                self.bus.publish(DecisionEmitted(decision))
+                for command_sink in self.sinks:
+                    command_sink.emit(decision)
+                emitted = True
         latent_point = self._latent_point(feature)
+        observation = OnlineObservation(
+            window_id=feature.trial_id,
+            window_start=start,
+            window_end=end,
+            phase=self._phase,
+            feature=feature,
+            prediction=prediction,
+            decision=decision,
+            quality=quality,
+            current_ground_truth_if_known=ground_truth,
+            model_version=self.decoder.model_version,
+            emitted=emitted,
+        )
+        self._online_observations.append(observation)
+        self.bus.publish(OnlineInferenceProduced(observation, latent_point))
         self.bus.publish(LiveWindowUpdated(feature, prediction, decision, latent_point))
 
-    def _preview_decision(self, prediction: Prediction) -> Decision:
-        command = prediction.predicted_label
-        reason = "preview_argmax"
-        if prediction.confidence < self.config.decision.posterior_threshold:
-            command = "NONE"
-            reason = "preview_below_threshold"
-        return Decision(
-            timestamp=prediction.timestamp,
-            command=command if self.config.decision.emit_none or command != "NONE" else "",
-            probabilities=dict(prediction.probabilities),
-            confidence=prediction.confidence,
-            model_version=prediction.model_version,
-            reason=reason,
-            threshold=self.config.decision.posterior_threshold,
-            consecutive=1 if command != "NONE" else 0,
-            required_consecutive=1,
-        )
+    def _online_control_allowed(self) -> bool:
+        if self._phase in {
+            CalibrationPhase.CHALLENGE_STREAMING,
+            CalibrationPhase.FINAL_TEST_STREAMING,
+            CalibrationPhase.INFERENCE,
+        }:
+            return True
+        if self.config.source.mode == "lsl_live" and self.decoder.model_version:
+            self._set_phase(CalibrationPhase.INFERENCE)
+            return True
+        return False
+
+    def _online_decision_sink_for_phase(self) -> list[Decision] | None:
+        if self._phase == CalibrationPhase.CHALLENGE_STREAMING:
+            return self._validation_decisions
+        if self._phase in {CalibrationPhase.FINAL_TEST_STREAMING, CalibrationPhase.FROZEN_TEST}:
+            return self._test_decisions
+        return None
+
+    def _ground_truth_for_window(self, start: float, end: float) -> str | None:
+        midpoint = (start + end) / 2.0
+        best: BCIEvent | None = None
+        for event in self._seen_events:
+            event_end = event.timestamp + max(event.duration, 0.0)
+            if event.timestamp <= midpoint <= event_end and event.command is not None:
+                if best is None or event.timestamp >= best.timestamp:
+                    best = event
+        return best.command if best is not None else None
 
     def _latent_point(self, feature: FeatureRecord) -> list[float] | None:
         try:
@@ -504,23 +547,37 @@ class RealtimeExperimentEngine:
     def _n_unique_calibration_events(self) -> int:
         return len({int(r.provenance.get("source_event_id", r.provenance["event_index"])) for r in self._calibration})
 
-    def _predict_and_emit(self, feature: FeatureRecord, sink: list[Prediction], decision_sink: list[Decision] | None = None) -> None:
+    def _ensure_model_available(self) -> bool:
         if self.decoder.model_version == 0:
             if not self._maybe_update_model():
                 self.bus.publish(FitFailed("model unavailable; calibration requirements are not satisfied"))
-        if self.decoder.model_version == 0:
-            return
+        return self.decoder.model_version > 0
+
+    def _make_prediction(self, feature: FeatureRecord, true_label: str | None) -> Prediction:
         probs = self.decoder.predict(feature)
         label, confidence = max(probs.items(), key=lambda item: item[1])
-        prediction = Prediction(
+        return Prediction(
             trial_id=feature.trial_id,
-            true_label=feature.label,
+            true_label=true_label,
             probabilities=probs,
             predicted_label=label,
             confidence=float(confidence),
             model_version=self.decoder.model_version,
             timestamp=float(feature.provenance.get("end_time", time.time())),
         )
+
+    def _predict_for_evaluation(self, feature: FeatureRecord, sink: list[Prediction]) -> None:
+        if not self._ensure_model_available():
+            return
+        prediction = self._make_prediction(feature, true_label=feature.label)
+        sink.append(prediction)
+        self.bus.publish(PredictionProduced(prediction))
+        self.bus.publish(InferenceUpdated(feature, prediction, None, self._latent_point(feature)))
+
+    def _predict_and_emit(self, feature: FeatureRecord, sink: list[Prediction], decision_sink: list[Decision] | None = None) -> None:
+        if not self._ensure_model_available():
+            return
+        prediction = self._make_prediction(feature, true_label=feature.label)
         sink.append(prediction)
         self.bus.publish(PredictionProduced(prediction))
         decision = self.decision_policy.update(prediction)
@@ -564,6 +621,7 @@ class RealtimeExperimentEngine:
             "validation": summarize_predictions(self._validation_predictions, classes) if self._validation_predictions else {"n": 0},
             "test": summarize_predictions(self._test_predictions, classes) if self._test_predictions else {"n": 0},
             "n_features": len(self._all_features),
+            "n_online_observations": len(self._online_observations),
         }
         if self._validation_predictions:
             passed = self._challenge_passed(metrics["validation"])
@@ -583,6 +641,7 @@ class RealtimeExperimentEngine:
         self._write_decisions()
         self._write_decisions_file("challenge_decisions.csv", self._validation_decisions)
         self._write_decisions_file("final_test_decisions.csv", self._test_decisions)
+        self._write_online_observations()
         self._write_parameter_changes()
         if self._test_predictions:
             (self.artifact_dir / "final_test_metrics.json").write_text(json.dumps(metrics["test"], indent=2), encoding="utf-8")
@@ -774,6 +833,61 @@ class RealtimeExperimentEngine:
                         "probabilities": json.dumps(d.probabilities, sort_keys=True),
                     }
                 )
+
+    def _write_online_observations(self) -> None:
+        csv_path = self.artifact_dir / "online_observations.csv"
+        jsonl_path = self.artifact_dir / "online_observations.jsonl"
+        fieldnames = [
+            "window_id",
+            "window_start",
+            "window_end",
+            "phase",
+            "ground_truth",
+            "predicted_label",
+            "prediction_confidence",
+            "decision_command",
+            "decision_reason",
+            "decision_confidence",
+            "model_version",
+            "emitted",
+            "probabilities",
+            "quality_score",
+            "quality_flags",
+            "quality_history_ready",
+        ]
+        with csv_path.open("w", newline="", encoding="utf-8") as f:
+            writer = csv.DictWriter(f, fieldnames=fieldnames)
+            writer.writeheader()
+            for observation in self._online_observations:
+                writer.writerow(self._online_observation_row(observation))
+        with jsonl_path.open("w", encoding="utf-8") as f:
+            for observation in self._online_observations:
+                row = self._online_observation_row(observation)
+                row["feature_values"] = observation.feature.values.tolist()
+                row["frequency_scores"] = observation.feature.frequency_scores
+                f.write(json.dumps(row, sort_keys=True) + "\n")
+
+    def _online_observation_row(self, observation: OnlineObservation) -> dict[str, Any]:
+        prediction = observation.prediction
+        decision = observation.decision
+        return {
+            "window_id": observation.window_id,
+            "window_start": observation.window_start,
+            "window_end": observation.window_end,
+            "phase": observation.phase.value,
+            "ground_truth": observation.current_ground_truth_if_known,
+            "predicted_label": prediction.predicted_label if prediction is not None else None,
+            "prediction_confidence": prediction.confidence if prediction is not None else None,
+            "decision_command": decision.command if decision is not None else None,
+            "decision_reason": decision.reason if decision is not None else None,
+            "decision_confidence": decision.confidence if decision is not None else None,
+            "model_version": observation.model_version,
+            "emitted": observation.emitted,
+            "probabilities": json.dumps(prediction.probabilities, sort_keys=True) if prediction is not None else "{}",
+            "quality_score": observation.quality.score if observation.quality is not None else None,
+            "quality_flags": ";".join(observation.quality.flags) if observation.quality is not None else "",
+            "quality_history_ready": observation.quality.history_ready if observation.quality is not None else False,
+        }
 
     def _write_parameter_changes(self) -> None:
         with (self.artifact_dir / "parameter_change_log.csv").open("w", newline="", encoding="utf-8") as f:

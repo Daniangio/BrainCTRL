@@ -113,6 +113,16 @@ decision:
   refractory_seconds: 0.5
   emit_none: true
 
+quality:
+  enabled: true
+  warmup_seconds: 15.0
+  history_tau_seconds: 30.0
+  hard_reject_threshold: 0.25
+  adaptation_min_quality: 0.80
+  high_frequency_start_hz: 35.0
+  line_frequency_hz: 50.0
+  max_bad_channels_fraction: 0.34
+
 output:
   console: true
   udp:
@@ -139,6 +149,8 @@ experiment:
   poll_interval_seconds: 0.01
   max_idle_seconds: 15.0
   live_preview: true
+  online_inference: true
+  online_inference_stride_seconds: null
 
 gui:
   enabled: true
