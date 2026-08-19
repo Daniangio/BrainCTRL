@@ -3,6 +3,8 @@ from __future__ import annotations
 from bci.config import load_config
 from bci.domain import Prediction
 from bci.inference.decision import ExponentialEvidencePolicy
+from bci.inference.factory import get_decision_policy
+from bci.inference.decision import MarkovEvidencePolicy
 from bci.sources.replay import RawReplayEEGSource, RawReplayEventSource
 from bci.sources.synthetic import SyntheticEEGSource
 
@@ -24,6 +26,47 @@ def test_abstention_below_threshold():
         )
     )
     assert decision.command == "NONE"
+
+
+def test_markov_evidence_policy_resists_weak_one_window_switch():
+    config = load_config("configs/kalunga_v0.yaml")
+    config.decision.type = "markov_evidence"
+    config.decision.mode = "held_state"
+    config.decision.posterior_threshold = 0.55
+    config.decision.consecutive_windows = 1
+    config.decision.refractory_seconds = 0.0
+    policy = MarkovEvidencePolicy(config)
+    first = policy.update(
+        Prediction(
+            trial_id="t1",
+            true_label=None,
+            probabilities={"LEFT": 0.90, "RIGHT": 0.05, "NONE": 0.05},
+            predicted_label="LEFT",
+            confidence=0.90,
+            model_version=1,
+            timestamp=1.0,
+        )
+    )
+    second = policy.update(
+        Prediction(
+            trial_id="t2",
+            true_label=None,
+            probabilities={"LEFT": 0.35, "RIGHT": 0.55, "NONE": 0.10},
+            predicted_label="RIGHT",
+            confidence=0.55,
+            model_version=1,
+            timestamp=1.25,
+        )
+    )
+    assert first.command == "LEFT"
+    assert second.command != "RIGHT"
+    assert second.probabilities["LEFT"] > second.probabilities["RIGHT"]
+
+
+def test_decision_policy_factory_selects_markov():
+    config = load_config("configs/kalunga_v0.yaml")
+    config.decision.type = "markov_evidence"
+    assert isinstance(get_decision_policy(config), MarkovEvidencePolicy)
 
 
 def test_source_substitution_contract():

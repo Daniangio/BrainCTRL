@@ -42,6 +42,7 @@ from bci.experiment.events import (
 from bci.experiment.trial_builder import RealtimeTrialBuilder
 from bci.features.base import FeatureExtractor
 from bci.inference.decision import DecisionPolicy
+from bci.inference.quality import quality_adjust_prediction
 from bci.models.base import Decoder
 from bci.preprocessing.base import Preprocessor
 from bci.preprocessing.quality import SignalQualityEstimator
@@ -373,13 +374,20 @@ class RealtimeExperimentEngine:
         feature = self.feature_extractor.transform(self.preprocessor.transform(trial))
         quality = self.quality_estimator.estimate(chunk.data, ring.sfreq, list(ring.ch_names)) if self.quality_estimator is not None else None
         prediction: Prediction | None = None
+        evidence_prediction: Prediction | None = None
         decision: Decision | None = None
+        quality_action = "not_evaluated"
         emitted = False
         ground_truth = self._ground_truth_for_window(start, end)
         if self.decoder.model_version:
             prediction = self._make_prediction(feature, true_label=ground_truth)
+            evidence_prediction, quality_action = quality_adjust_prediction(
+                prediction,
+                quality,
+                self.config.quality.hard_reject_threshold,
+            )
             if self.config.experiment.online_inference and self._online_control_allowed():
-                decision = self.decision_policy.update(prediction)
+                decision = self.decision_policy.update(evidence_prediction)
                 self._decisions.append(decision)
                 decision_sink = self._online_decision_sink_for_phase()
                 if decision_sink is not None:
@@ -396,8 +404,10 @@ class RealtimeExperimentEngine:
             phase=self._phase,
             feature=feature,
             prediction=prediction,
+            evidence_prediction=evidence_prediction,
             decision=decision,
             quality=quality,
+            quality_action=quality_action,
             current_ground_truth_if_known=ground_truth,
             model_version=self.decoder.model_version,
             emitted=emitted,
@@ -845,14 +855,18 @@ class RealtimeExperimentEngine:
             "ground_truth",
             "predicted_label",
             "prediction_confidence",
+            "evidence_predicted_label",
+            "evidence_confidence",
             "decision_command",
             "decision_reason",
             "decision_confidence",
             "model_version",
             "emitted",
             "probabilities",
+            "evidence_probabilities",
             "quality_score",
             "quality_flags",
+            "quality_action",
             "quality_history_ready",
         ]
         with csv_path.open("w", newline="", encoding="utf-8") as f:
@@ -869,6 +883,7 @@ class RealtimeExperimentEngine:
 
     def _online_observation_row(self, observation: OnlineObservation) -> dict[str, Any]:
         prediction = observation.prediction
+        evidence_prediction = observation.evidence_prediction
         decision = observation.decision
         return {
             "window_id": observation.window_id,
@@ -878,14 +893,20 @@ class RealtimeExperimentEngine:
             "ground_truth": observation.current_ground_truth_if_known,
             "predicted_label": prediction.predicted_label if prediction is not None else None,
             "prediction_confidence": prediction.confidence if prediction is not None else None,
+            "evidence_predicted_label": evidence_prediction.predicted_label if evidence_prediction is not None else None,
+            "evidence_confidence": evidence_prediction.confidence if evidence_prediction is not None else None,
             "decision_command": decision.command if decision is not None else None,
             "decision_reason": decision.reason if decision is not None else None,
             "decision_confidence": decision.confidence if decision is not None else None,
             "model_version": observation.model_version,
             "emitted": observation.emitted,
             "probabilities": json.dumps(prediction.probabilities, sort_keys=True) if prediction is not None else "{}",
+            "evidence_probabilities": json.dumps(evidence_prediction.probabilities, sort_keys=True)
+            if evidence_prediction is not None
+            else "{}",
             "quality_score": observation.quality.score if observation.quality is not None else None,
             "quality_flags": ";".join(observation.quality.flags) if observation.quality is not None else "",
+            "quality_action": observation.quality_action,
             "quality_history_ready": observation.quality.history_ready if observation.quality is not None else False,
         }
 

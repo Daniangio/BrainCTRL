@@ -9,8 +9,8 @@ from bci.config import BCIConfig
 from bci.domain import BCIEvent
 from bci.experiment.bus import EventBus
 from bci.experiment.engine import RealtimeExperimentEngine, ExperimentResult
-from bci.features.spectral import SpectralFeatureExtractor
-from bci.inference.decision import ExponentialEvidencePolicy
+from bci.features.factory import get_feature_extractor
+from bci.inference.factory import get_decision_policy
 from bci.models.factory import get_decoder
 from bci.preprocessing.standard import StandardPreprocessor
 from bci.preprocessing.streaming import StreamingPreprocessor
@@ -76,14 +76,15 @@ def build_realtime_experiment(config: BCIConfig, bus: EventBus | None = None, ar
         protocol_entries = []
     else:
         raise ValueError(f"unsupported source mode {config.source.mode!r}")
+    feature_extractor = get_feature_extractor(config)
     engine = RealtimeExperimentEngine(
         config=config,
         eeg_source=eeg_source,
         event_source=event_source,
         preprocessor=StandardPreprocessor(config, apply_filters=False),
-        feature_extractor=SpectralFeatureExtractor(config),
+        feature_extractor=feature_extractor,
         decoder=get_decoder(config),
-        decision_policy=ExponentialEvidencePolicy(config),
+        decision_policy=get_decision_policy(config),
         sinks=sinks,
         event_bus=bus,
         split_by_event=split_by_event,

@@ -58,6 +58,19 @@ features:
   neighbor_inner_gap_hz: 1.0
   neighbor_outer_width_hz: 3.0
   log_epsilon: 1.0e-12
+  fbcca:
+    bands_hz:
+      - [6.0, 50.0]
+      - [12.0, 50.0]
+      - [18.0, 50.0]
+    harmonics: [1, 2, 3]
+    regularization: 1.0e-6
+  covariance:
+    estimator: oas
+    normalize: none
+    regularization: 1.0e-6
+    bands_hz:
+      - [6.0, 50.0]
 
 split:
   type: chronological_trial
@@ -81,6 +94,10 @@ model:
   class_prior: empirical
   regularization: 1.0e-3
   standardize_features: true
+  cca_activation_threshold: 0.20
+  cca_logit_scale: 8.0
+  riemannian_metric: riemann
+  probability_temperature: 1.0
 
 protocol:
   mode: scientific
@@ -107,11 +124,16 @@ baselines:
 
 decision:
   type: exponential_evidence
+  mode: pulse
   alpha: 0.35
   posterior_threshold: 0.85
   consecutive_windows: 2
   refractory_seconds: 0.5
   emit_none: true
+  self_transition_active: 0.97
+  self_transition_none: 0.94
+  observation_temperature: 1.0
+  switch_hold_seconds: 0.25
 
 quality:
   enabled: true

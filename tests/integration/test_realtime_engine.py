@@ -67,6 +67,21 @@ def test_classifier_smoke_is_interpretable_and_trains_headlessly(tmp_path):
     assert result.metrics["test"]["balanced_accuracy"] >= 0.9
 
 
+def test_fbcca_cca_classifier_smoke_runs_without_supervised_decoder_fit(tmp_path):
+    config = load_config("configs/kalunga_v0.yaml")
+    config.experiment.mode = "classifier_smoke"
+    config.experiment.gui = False
+    config.gui.enabled = False
+    config.output.console = False
+    config.experiment.max_idle_seconds = 2.0
+    config.features.type = "fbcca"
+    config.model.type = "cca"
+    result = build_realtime_experiment(config, artifact_dir=tmp_path).run()
+    assert result.model_version >= 1
+    assert result.metrics["test"]["balanced_accuracy"] >= 0.9
+    assert result.metrics["test"]["false_commands_per_minute_rest"] == 0.0
+
+
 def test_controller_smoke_exercises_evidence_accumulator(tmp_path):
     config = load_config("configs/kalunga_v0.yaml")
     config.experiment.mode = "controller_smoke"

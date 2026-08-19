@@ -103,6 +103,9 @@ class FeatureRecord:
     log_power: np.ndarray | None = None
     spectral_power: np.ndarray | None = None
     spectral_channel_names: list[str] | None = None
+    covariance_matrices: np.ndarray | None = None
+    covariance_band_names: list[str] | None = None
+    representation_type: str = "vector"
     omitted_harmonics: list[dict[str, Any]] = field(default_factory=list)
 
 
@@ -147,8 +150,10 @@ class OnlineObservation:
     phase: CalibrationPhase
     feature: FeatureRecord
     prediction: Prediction | None
+    evidence_prediction: Prediction | None
     decision: Decision | None
     quality: SignalQuality | None = None
+    quality_action: str = "not_evaluated"
     current_ground_truth_if_known: str | None = None
     model_version: int = 0
     emitted: bool = False

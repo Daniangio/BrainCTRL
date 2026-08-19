@@ -81,6 +81,19 @@ class TrialConfig(BaseModel):
     inference_stride_seconds: float = 0.5
 
 
+class FBCCAConfig(BaseModel):
+    bands_hz: list[tuple[float, float]] = Field(default_factory=lambda: [(6.0, 50.0), (12.0, 50.0), (18.0, 50.0)])
+    harmonics: list[int] = Field(default_factory=lambda: [1, 2, 3])
+    regularization: float = 1.0e-6
+
+
+class CovarianceFeatureConfig(BaseModel):
+    estimator: Literal["empirical", "oas", "ledoit_wolf"] = "oas"
+    normalize: Literal["none", "trace"] = "none"
+    regularization: float = 1.0e-6
+    bands_hz: list[tuple[float, float]] = Field(default_factory=lambda: [(6.0, 50.0)])
+
+
 class FeatureConfig(BaseModel):
     type: str = "spectral_relative_power"
     harmonics: list[int] = Field(default_factory=lambda: [1, 2, 3])
@@ -88,6 +101,8 @@ class FeatureConfig(BaseModel):
     neighbor_inner_gap_hz: float = 1.0
     neighbor_outer_width_hz: float = 3.0
     log_epsilon: float = 1.0e-12
+    fbcca: FBCCAConfig = Field(default_factory=FBCCAConfig)
+    covariance: CovarianceFeatureConfig = Field(default_factory=CovarianceFeatureConfig)
 
 
 class SplitConfig(BaseModel):
@@ -121,6 +136,10 @@ class ModelConfig(BaseModel):
     class_prior: str = "empirical"
     regularization: float = 1.0e-3
     standardize_features: bool = True
+    cca_activation_threshold: float = 0.20
+    cca_logit_scale: float = 8.0
+    riemannian_metric: str = "riemann"
+    probability_temperature: float = 1.0
 
 
 class ChallengeConfig(BaseModel):
@@ -156,11 +175,16 @@ class BaselineConfig(BaseModel):
 
 class DecisionConfig(BaseModel):
     type: str = "exponential_evidence"
+    mode: Literal["pulse", "held_state"] = "pulse"
     alpha: float = 0.35
     posterior_threshold: float = 0.85
     consecutive_windows: int = 2
     refractory_seconds: float = 0.5
     emit_none: bool = True
+    self_transition_active: float = 0.97
+    self_transition_none: float = 0.94
+    observation_temperature: float = 1.0
+    switch_hold_seconds: float = 0.25
 
 
 class QualityConfig(BaseModel):
