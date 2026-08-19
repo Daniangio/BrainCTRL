@@ -348,6 +348,7 @@ class RealtimeExperimentEngine:
         self.bus.publish(EEGWindowReady(window))
 
     def _maybe_run_online_inference(self, ring: TimestampedRingBuffer) -> None:
+        total_started = time.perf_counter()
         if not (self.config.experiment.live_preview or self.config.experiment.online_inference) or ring.latest_time is None:
             return
         latest = ring.latest_time
@@ -359,6 +360,8 @@ class RealtimeExperimentEngine:
         if not ring.has_interval(start, end):
             return
         expected_samples = int(round(self.config.trials.window_seconds * ring.sfreq))
+        latency_ms: dict[str, float] = {}
+        materialize_started = time.perf_counter()
         chunk = ring.slice(start, end, expected_samples=expected_samples)
         trial = TrialRecord(
             trial_id=f"online-{self._online_inference_counter:06d}",
@@ -377,11 +380,18 @@ class RealtimeExperimentEngine:
             source_event_id=None,
             split="online",
         )
+        latency_ms["window_materialization"] = self._elapsed_ms(materialize_started)
         self._online_inference_counter += 1
         self._last_online_inference_time = latest
+        feature_started = time.perf_counter()
         feature = self.feature_extractor.transform(self.preprocessor.transform(trial))
+        latency_ms["feature_extraction"] = self._elapsed_ms(feature_started)
+        quality_started = time.perf_counter()
         quality = self.quality_estimator.estimate(chunk.data, ring.sfreq, list(ring.ch_names)) if self.quality_estimator is not None else None
+        latency_ms["quality"] = self._elapsed_ms(quality_started)
+        alignment_started = time.perf_counter()
         feature = self.aligner.update_transform(feature, quality)
+        latency_ms["alignment"] = self._elapsed_ms(alignment_started)
         prediction: Prediction | None = None
         evidence_prediction: Prediction | None = None
         decision: Decision | None = None
@@ -389,13 +399,16 @@ class RealtimeExperimentEngine:
         emitted = False
         ground_truth = self._ground_truth_for_window(start, end)
         if self.decoder.model_version:
+            decoder_started = time.perf_counter()
             prediction = self._make_prediction(feature, true_label=ground_truth)
             evidence_prediction, quality_action = quality_adjust_prediction(
                 prediction,
                 quality,
                 self.config.quality.hard_reject_threshold,
             )
+            latency_ms["decoder"] = self._elapsed_ms(decoder_started)
             if self.config.experiment.online_inference and self._online_control_allowed():
+                decision_started = time.perf_counter()
                 decision = self.decision_policy.update(evidence_prediction)
                 self._decisions.append(decision)
                 decision_sink = self._online_decision_sink_for_phase()
@@ -405,7 +418,12 @@ class RealtimeExperimentEngine:
                 for command_sink in self.sinks:
                     command_sink.emit(decision)
                 emitted = True
+                latency_ms["decision"] = self._elapsed_ms(decision_started)
+        latency_ms.setdefault("decoder", 0.0)
+        latency_ms.setdefault("decision", 0.0)
+        latent_started = time.perf_counter()
         latent_point = self._latent_point(feature)
+        latency_ms["latent"] = self._elapsed_ms(latent_started)
         observation = OnlineObservation(
             window_id=feature.trial_id,
             window_start=start,
@@ -417,17 +435,26 @@ class RealtimeExperimentEngine:
             decision=decision,
             quality=quality,
             quality_action=quality_action,
+            latency_ms=latency_ms,
             current_ground_truth_if_known=ground_truth,
             model_version=self.decoder.model_version,
             alignment_version=feature.alignment_version,
             emitted=emitted,
         )
         self._online_observations.append(observation)
+        publish_started = time.perf_counter()
         self.bus.publish(OnlineInferenceProduced(observation, latent_point))
         self.bus.publish(LiveWindowUpdated(feature, prediction, decision, latent_point))
+        latency_ms["publication"] = self._elapsed_ms(publish_started)
+        adaptation_started = time.perf_counter()
         adaptation_row = self.adaptor.update(observation, self.decoder)
+        latency_ms["adaptation"] = self._elapsed_ms(adaptation_started)
+        latency_ms["total_compute"] = self._elapsed_ms(total_started)
         if adaptation_row["reason"] != "disabled":
             self._adaptation_log.append(adaptation_row)
+
+    def _elapsed_ms(self, started: float) -> float:
+        return (time.perf_counter() - started) * 1000.0
 
     def _online_control_allowed(self) -> bool:
         if self._phase in {
@@ -884,6 +911,16 @@ class RealtimeExperimentEngine:
             "quality_flags",
             "quality_action",
             "quality_history_ready",
+            "latency_window_materialization_ms",
+            "latency_feature_extraction_ms",
+            "latency_quality_ms",
+            "latency_alignment_ms",
+            "latency_decoder_ms",
+            "latency_decision_ms",
+            "latency_latent_ms",
+            "latency_publication_ms",
+            "latency_adaptation_ms",
+            "latency_total_compute_ms",
         ]
         with csv_path.open("w", newline="", encoding="utf-8") as f:
             writer = csv.DictWriter(f, fieldnames=fieldnames)
@@ -925,6 +962,16 @@ class RealtimeExperimentEngine:
             "quality_flags": ";".join(observation.quality.flags) if observation.quality is not None else "",
             "quality_action": observation.quality_action,
             "quality_history_ready": observation.quality.history_ready if observation.quality is not None else False,
+            "latency_window_materialization_ms": observation.latency_ms.get("window_materialization", 0.0),
+            "latency_feature_extraction_ms": observation.latency_ms.get("feature_extraction", 0.0),
+            "latency_quality_ms": observation.latency_ms.get("quality", 0.0),
+            "latency_alignment_ms": observation.latency_ms.get("alignment", 0.0),
+            "latency_decoder_ms": observation.latency_ms.get("decoder", 0.0),
+            "latency_decision_ms": observation.latency_ms.get("decision", 0.0),
+            "latency_latent_ms": observation.latency_ms.get("latent", 0.0),
+            "latency_publication_ms": observation.latency_ms.get("publication", 0.0),
+            "latency_adaptation_ms": observation.latency_ms.get("adaptation", 0.0),
+            "latency_total_compute_ms": observation.latency_ms.get("total_compute", 0.0),
         }
 
     def _write_alignment_status(self) -> None:

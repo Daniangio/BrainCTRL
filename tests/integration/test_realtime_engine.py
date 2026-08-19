@@ -202,6 +202,7 @@ def test_live_preview_updates_at_stride_without_training_contamination(tmp_path)
     assert all(update.feature.split == "online" for update in live_updates)
     observations = (tmp_path / "online_observations.csv").read_text(encoding="utf-8").splitlines()
     assert len(observations) == len(online_updates) + 1
+    assert "latency_total_compute_ms" in observations[0]
 
 
 def test_authoritative_online_inference_avoids_event_decision_double_updates(tmp_path):

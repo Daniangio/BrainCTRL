@@ -1,0 +1,44 @@
+project:
+  name: ssvep_bci_v2_fbcca
+  seed: 42
+  data_dir: ./data/moabb
+  artifact_dir: ./artifacts
+  log_dir: ./logs
+
+dataset:
+  name: Kalunga2016
+  subjects: [1]
+  download_if_missing: true
+
+commands:
+  native_to_command:
+    "13": LEFT
+    "21": RIGHT
+    "rest": NONE
+  ignore_native_labels: ["17"]
+  active_commands: [LEFT, RIGHT]
+  reject_command: NONE
+
+features:
+  type: fbcca
+  fbcca:
+    bands_hz:
+      - [6.0, 50.0]
+      - [12.0, 50.0]
+      - [18.0, 50.0]
+    harmonics: [1, 2, 3]
+    regularization: 1.0e-6
+
+model:
+  type: cca
+  cca_activation_threshold: 0.20
+  cca_logit_scale: 8.0
+
+decision:
+  type: markov_evidence
+  mode: held_state
+  posterior_threshold: 0.80
+  self_transition_active: 0.97
+  self_transition_none: 0.94
+  observation_temperature: 1.0
+  switch_hold_seconds: 0.25

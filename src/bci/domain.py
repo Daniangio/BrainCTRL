@@ -155,6 +155,7 @@ class OnlineObservation:
     decision: Decision | None
     quality: SignalQuality | None = None
     quality_action: str = "not_evaluated"
+    latency_ms: dict[str, float] = field(default_factory=dict)
     current_ground_truth_if_known: str | None = None
     model_version: int = 0
     alignment_version: int = 0

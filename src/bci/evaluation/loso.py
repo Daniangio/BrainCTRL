@@ -32,28 +32,74 @@ def run_loso_benchmark(config: BCIConfig, run_prefix: str = "loso") -> dict:
     for target_subject, source_subjects in loso_folds(config.dataset.subjects):
         fold_dir = artifact_dir / f"target_subject_{target_subject}"
         fold_dir.mkdir(parents=True, exist_ok=True)
-        source_features = _features_for_subjects(config, source_subjects, "calibration")
-        target_features = _features_for_subjects(config, [target_subject], "test")
-        decoder = get_decoder(config)
-        decoder.fit(source_features)
-        decoder.save(fold_dir / f"model_v{decoder.model_version:03d}.pkl")
-        predictions = predict_records(decoder, target_features)
-        metrics = summarize_predictions(predictions, classes)
-        metrics["source_subjects"] = source_subjects
-        metrics["target_subject"] = target_subject
-        metrics["n_source_features"] = len(source_features)
-        metrics["n_target_features"] = len(target_features)
-        (fold_dir / "metrics.json").write_text(json.dumps(metrics, indent=2), encoding="utf-8")
-        fold_metrics[str(target_subject)] = metrics
+        variants = {
+            "source_only": _run_fold_variant(
+                config,
+                source_subjects=source_subjects,
+                target_subject=target_subject,
+                classes=classes,
+                fold_dir=fold_dir / "source_only",
+                target_unlabeled_ea=False,
+            ),
+            "target_unlabeled_ea": _run_fold_variant(
+                config,
+                source_subjects=source_subjects,
+                target_subject=target_subject,
+                classes=classes,
+                fold_dir=fold_dir / "target_unlabeled_ea",
+                target_unlabeled_ea=True,
+            ),
+        }
+        (fold_dir / "metrics.json").write_text(json.dumps(variants, indent=2), encoding="utf-8")
+        fold_metrics[str(target_subject)] = variants
 
     summary = {
         "artifact_dir": str(artifact_dir),
         "subjects": config.dataset.subjects,
         "folds": fold_metrics,
-        "macro_balanced_accuracy": _mean_metric(fold_metrics, "balanced_accuracy"),
+        "variants": ["source_only", "target_unlabeled_ea"],
+        "macro_balanced_accuracy": {
+            "source_only": _mean_variant_metric(fold_metrics, "source_only", "balanced_accuracy"),
+            "target_unlabeled_ea": _mean_variant_metric(fold_metrics, "target_unlabeled_ea", "balanced_accuracy"),
+        },
     }
     (artifact_dir / "metrics.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
     return summary
+
+
+def _run_fold_variant(
+    config: BCIConfig,
+    source_subjects: list[int],
+    target_subject: int,
+    classes: list[str],
+    fold_dir: Path,
+    target_unlabeled_ea: bool,
+) -> dict:
+    fold_dir.mkdir(parents=True, exist_ok=True)
+    variant_config = _variant_config(config, target_unlabeled_ea)
+    source_features = _features_for_subjects(variant_config, source_subjects, "calibration")
+    target_features = _features_for_subjects(variant_config, [target_subject], "test")
+    decoder = get_decoder(variant_config)
+    decoder.fit(source_features)
+    decoder.save(fold_dir / f"model_v{decoder.model_version:03d}.pkl")
+    predictions = predict_records(decoder, target_features)
+    metrics = summarize_predictions(predictions, classes)
+    metrics["variant"] = "target_unlabeled_ea" if target_unlabeled_ea else "source_only"
+    metrics["source_subjects"] = source_subjects
+    metrics["target_subject"] = target_subject
+    metrics["n_source_features"] = len(source_features)
+    metrics["n_target_features"] = len(target_features)
+    metrics["target_unlabeled_ea"] = target_unlabeled_ea
+    metrics["alignment_enabled"] = variant_config.alignment.enabled
+    (fold_dir / "metrics.json").write_text(json.dumps(metrics, indent=2), encoding="utf-8")
+    return metrics
+
+
+def _variant_config(config: BCIConfig, target_unlabeled_ea: bool) -> BCIConfig:
+    variant = config.model_copy(deep=True)
+    variant.alignment.enabled = target_unlabeled_ea
+    variant.alignment.type = "euclidean" if target_unlabeled_ea else "none"
+    return variant
 
 
 def _features_for_subjects(config: BCIConfig, subjects: list[int], split: str) -> list[FeatureRecord]:
@@ -67,8 +113,8 @@ def _features_for_subjects(config: BCIConfig, subjects: list[int], split: str) -
     return [replace(feature, split=split) for feature in features]
 
 
-def _mean_metric(fold_metrics: dict[str, dict], name: str) -> float | None:
-    values = [float(metrics[name]) for metrics in fold_metrics.values() if name in metrics]
+def _mean_variant_metric(fold_metrics: dict[str, dict], variant: str, name: str) -> float | None:
+    values = [float(metrics[variant][name]) for metrics in fold_metrics.values() if name in metrics.get(variant, {})]
     if not values:
         return None
     return sum(values) / len(values)
